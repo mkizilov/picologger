@@ -18,6 +18,12 @@ environment where those operations are permitted. The portable heartbeat source
 was compiled to an object with the host compiler and strict warning flags; it
 was not linked or executed in this sandbox.
 
+An empty `third_party/pico-sdk/` directory preserves a clean Git status for the
+uninitialized submodule; it is not an SDK checkout. If the directory is missing,
+Git may report the gitlink as deleted. Recreate the directory or initialize the
+submodule rather than committing that deletion. A subsequent check in the same
+sandbox again found GitHub DNS resolution unavailable and CMake absent.
+
 ## Manual hardware checklist (not performed)
 
 1. Build the firmware and flash `build/firmware/picologger.uf2` to a Pico/RP2040 using its BOOTSEL mode. Connect the Pico to a computer over USB; no external sensor, SD module or ADC input is needed for this scaffold.
