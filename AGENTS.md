@@ -39,6 +39,7 @@ Extend this file with the project's language-specific architecture and verificat
 - USB CDC commands, asynchronous stop/start, rate changes and checksummed dumps are documented in `docs/USB_COMMANDS.md`.
 - Persistent settings reserve the final two flash sectors; `docs/SETTINGS.md` documents flash lockout, intentional ADC pauses and manual checks.
 - Watchdog progress gating and retained HardFault reports are described in `docs/WATCHDOG.md`; reset timing and SRAM retention are unmeasured on hardware.
+- Core 0 publishes BME records to a 1024-record SPSC ring; core 1 drains it and owns FatFs. `docs/DUAL_CORE.md` covers ordering and unmeasured jitter comparison.
 - Run `scripts/check.sh` to build both targets and run host tests, with at most two workers.
 - Agents cannot flash or observe the board. Every task touching hardware ends with a numbered manual test checklist stating what to flash, connect, and expect; never claim unobserved results.
 - Definition of done for each future task: `scripts/check.sh` passes, relevant docs are updated, provide a short summary, and create a local conventional-commit Git commit. Report genuine environment limitations instead of claiming checks passed.

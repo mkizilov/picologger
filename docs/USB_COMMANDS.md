@@ -27,7 +27,7 @@ issuing `rate` or another state transition. `status` reflects the most recently
 received storage-core state, so file and SD status can briefly lag. A failed
 stop can leave unsynced records; check `uncertain` and `recovery_errors` in the
 periodic SD diagnostics. There is no explicit unmount/eject command.
-The ring high-water mark is the maximum BME280 record occupancy since boot;
+The ring high-water mark is a conservative producer-side BME280 occupancy snapshot since boot;
 sample counts are acquired/delivered counts, not a count of durable records.
 `watchdog_missing` is the current missing-progress bitmask described in
 `WATCHDOG.md`.

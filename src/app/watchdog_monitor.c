@@ -40,10 +40,12 @@ void watchdog_monitor_poll(void)
         .physical_progress = storage.physical_progress,
         .physical_observed = storage.physical_observed,
         .physical_at_us = storage.physical_at_us,
+        .ring_progress = storage.ring_progress,
         .rate_hz = sensor.rate_hz,
         .bme_required = sensor.expected,
         .adc_required = adc_app_watchdog_expected(),
-        .writer_required = sensor.expected && storage.state == LOGGER_RUNNING && storage.online
+        .writer_required = sensor.expected && storage.state == LOGGER_RUNNING && storage.online,
+        .ring_required = sensor.expected && storage.state == LOGGER_RUNNING
     };
     uint64_t now = time_us_64();
     missing = watchdog_health_observe(&health, now, &observation);

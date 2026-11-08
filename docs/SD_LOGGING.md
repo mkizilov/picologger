@@ -19,12 +19,12 @@ card. No card-detect pin is assumed.
 
 ## Buffering, rotation and failures
 
-Core 0 drains a 256-record single-context sampling ring into four bounded
-inter-core batches. Core 1 exclusively owns FatFs, mounts, writes and syncs;
+Core 0 publishes BME280 records into a 1024-record cross-core SPSC ring. Core 1
+drains it, encodes records and exclusively owns FatFs, mounts, writes and syncs;
 its potentially long SD operations do not directly block the acquisition main
-loop. Batch ownership passes through bounded SDK multicore queues. The RP2040
-hardware FIFO is reserved for SDK flash lockout; do not use it for application
-messages. Interrupts, bus contention,
+loop. Bounded SDK multicore queues carry control and status, not sample data.
+The RP2040 hardware FIFO is reserved for SDK flash lockout; do not use it for
+application data or other messages. Interrupts, bus contention,
 serial printing and finite buffering can still cause sampling or ADC losses;
 no real-time guarantee has been measured.
 
@@ -54,7 +54,7 @@ after its 512-byte header. Existing `.BIN` or `.TMP` names are skipped. If all
 
 `f_sync` is attempted about every five seconds, and before rotation. It syncs
 bytes already submitted to FatFs, **not** the incomplete 4 KiB RAM chunk or
-records still in the core-0 ring/batches. At low sample rates a partial chunk
+records still in the shared ring. At low sample rates a partial chunk
 can remain in RAM much longer than five seconds. USB `stop` flushes and closes
 the current log, but the volume remains mounted and there is no eject command;
 powering down or removing a card can still lose buffered data,

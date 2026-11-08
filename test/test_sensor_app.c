@@ -2,6 +2,7 @@
 #include "sensor.h"
 #include "i2c_bus.h"
 #include "sampling_timer.h"
+#include "logger.h"
 
 #include <string.h>
 
@@ -13,15 +14,26 @@ static unsigned int probes, data_reads, writes, pulse_starts, pulse_ends, droppe
 static uint32_t timer_rate, sequence;
 static bool tick_pending, pin_high;
 static sampling_tick_t pending_tick;
+static log_record_t fake_samples[LOGGER_SAMPLE_RING_CAPACITY];
+static uint32_t fake_head, fake_tail;
+static uint32_t fake_high_water, fake_overflows;
 
 void i2c_bus_init(void) {}
-void logger_note_drop(uint32_t count) { dropped_records += count; }
+bool logger_submit_sample(const log_record_t *record)
+{
+    if (fake_head - fake_tail == LOGGER_SAMPLE_RING_CAPACITY) { ++dropped_records; ++fake_overflows; return false; }
+    fake_samples[fake_head++ & (LOGGER_SAMPLE_RING_CAPACITY - 1u)] = *record;
+    if (fake_head - fake_tail > fake_high_water) fake_high_water = fake_head - fake_tail;
+    return true;
+}
+uint32_t logger_ring_level(void) { return fake_head - fake_tail; }
+uint32_t logger_ring_high_water(void) { return fake_high_water; }
+uint32_t logger_take_ring_overflows(void) { uint32_t value = fake_overflows; fake_overflows = 0; return value; }
 void usb_console_sample(const log_record_t *record) { (void)record; }
 static unsigned int drain_samples(void)
 {
-    log_record_t record;
     unsigned int count = 0;
-    while (sensor_take_sample(&record)) ++count;
+    while (fake_tail != fake_head) { ++fake_tail; ++count; }
     return count;
 }
 int i2c_bus_probe(uint8_t address)
@@ -147,19 +159,19 @@ static void boot_scan_reset_and_timed_sample(void)
     clock_us = 30002000;
     sensor_poll();
     fail_data = false;
-    for (unsigned int i = 0; i < 300; ++i) {
+    for (unsigned int i = 0; i < 1100; ++i) {
         clock_us += 20000;
         post_tick();
         sensor_poll();
     }
-    TEST_ASSERT_EQUAL_UINT(44, dropped_records);
-    TEST_ASSERT_EQUAL_UINT(256, drain_samples());
+    TEST_ASSERT_EQUAL_UINT(76, dropped_records);
+    TEST_ASSERT_EQUAL_UINT(LOGGER_SAMPLE_RING_CAPACITY, drain_samples());
     sensor_status_t status;
     sensor_get_status(&status);
-    TEST_ASSERT_EQUAL_UINT64(799, status.samples);
+    TEST_ASSERT_EQUAL_UINT64(1599, status.samples);
     TEST_ASSERT_EQUAL_UINT64(1, status.missed);
     TEST_ASSERT_EQUAL_UINT64(1, status.read_errors);
-    TEST_ASSERT_EQUAL_UINT(256, status.ring_high_water);
+    TEST_ASSERT_EQUAL_UINT(LOGGER_SAMPLE_RING_CAPACITY, status.ring_high_water);
     TEST_ASSERT_TRUE(status.running);
     TEST_ASSERT_TRUE(status.expected);
     TEST_ASSERT_FALSE(sensor_set_rate(25));

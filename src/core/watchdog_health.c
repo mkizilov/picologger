@@ -8,17 +8,17 @@ void watchdog_health_init(watchdog_health_t *health) { memset(health, 0, sizeof(
 uint32_t watchdog_health_observe(watchdog_health_t *health, uint64_t now,
                                  const watchdog_observation_t *observation)
 {
-    const uint64_t values[5] = {observation->bme_samples, observation->adc_samples,
-                                observation->worker_progress, observation->writer_progress, observation->physical_progress};
-    const bool required[5] = {observation->bme_required, observation->adc_required,
-                              true, observation->writer_required, observation->writer_required};
+    const uint64_t values[6] = {observation->bme_samples, observation->adc_samples,
+        observation->worker_progress, observation->writer_progress, observation->physical_progress, observation->ring_progress};
+    const bool required[6] = {observation->bme_required, observation->adc_required,
+        true, observation->writer_required, observation->writer_required, observation->ring_required};
     uint32_t rate = observation->rate_hz >= 1 && observation->rate_hz <= 50 ? observation->rate_hz : 1;
     if (rate != health->last_rate) {
         health->last_rate = rate;
         health->physical_window = (uint64_t)((LOG_RECORDS_PER_BATCH + rate - 1u) / rate + 2u) * UINT64_C(1000000);
     }
     uint32_t missing = 0;
-    for (unsigned int i = 0; i < 5; ++i) {
+    for (unsigned int i = 0; i < 6; ++i) {
         if (!required[i]) { health->required[i] = false; health->seen[i] = false; continue; }
         if (!health->required[i]) {
             health->required[i] = true;

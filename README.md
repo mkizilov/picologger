@@ -26,6 +26,8 @@ Persistent settings and flash safety are documented in
 [docs/SETTINGS.md](docs/SETTINGS.md).
 Watchdog and retained HardFault reporting are documented in
 [docs/WATCHDOG.md](docs/WATCHDOG.md).
+Dual-core ownership and the before/after jitter procedure are in
+[docs/DUAL_CORE.md](docs/DUAL_CORE.md).
 
 ## Initial environment verification
 
@@ -57,3 +59,4 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 9. Follow [docs/USB_COMMANDS.md](docs/USB_COMMANDS.md) for command, stream and dump checks.
 10. Follow [docs/SETTINGS.md](docs/SETTINGS.md) for configuration and flash checks.
 11. Follow [docs/WATCHDOG.md](docs/WATCHDOG.md) for watchdog and HardFault checks.
+12. Follow [docs/DUAL_CORE.md](docs/DUAL_CORE.md) for dual-core and jitter comparison checks.

@@ -8,7 +8,6 @@
 #include "interval_stats.h"
 #include "log_format.h"
 #include "logger.h"
-#include "ring_buffer.h"
 #include "sampling_timer.h"
 #include "usb_console.h"
 #include "pico/stdlib.h"
@@ -29,10 +28,9 @@ static bool waiting_for_reset, ready, timer_failed, have_latest, running, desire
 static uint64_t reset_time, next_read, stats_start, missed, read_errors;
 static interval_stats_t intervals;
 static uint32_t previous_sequence;
-static uint32_t rate_hz = PICOLOGGER_SAMPLE_RATE_HZ, ring_high_water;
+static uint32_t rate_hz = PICOLOGGER_SAMPLE_RATE_HZ;
 static uint64_t total_samples, total_missed, total_read_errors;
-static ring_local_t samples;
-static log_record_t sample_storage[256], latest;
+static log_record_t latest;
 
 void sensor_configure_boot(uint32_t rate, bool enabled, bool start)
 {
@@ -44,7 +42,6 @@ void sensor_configure_boot(uint32_t rate, bool enabled, bool start)
 void sensor_start(void)
 {
     i2c_bus_init();
-    (void)ring_local_init(&samples, sample_storage, sizeof(sample_storage), 256, sizeof(sample_storage[0]));
     for (unsigned int address = 8; address <= 0x77; ++address) {
         int result = i2c_bus_probe((uint8_t)address);
         if (result > 0) found[address] = true;
@@ -111,12 +108,8 @@ static void sample_once(const sampling_tick_t *tick)
     have_latest = true;
     ++total_samples;
     usb_console_sample(&record);
-    if (!ring_local_push(&samples, &record)) logger_note_drop(1);
-    uint32_t occupancy = samples.head - samples.tail;
-    if (occupancy > ring_high_water) ring_high_water = occupancy;
+    (void)logger_submit_sample(&record);
 }
-
-bool sensor_take_sample(log_record_t *record) { return ring_local_pop(&samples, record); }
 
 bool sensor_set_running(bool enable)
 {
@@ -154,23 +147,23 @@ bool sensor_set_rate(uint32_t value)
 
 void sensor_get_status(sensor_status_t *status)
 {
-    *status = (sensor_status_t){total_samples, total_missed, total_read_errors, ring_high_water, rate_hz,
+    *status = (sensor_status_t){total_samples, total_missed, total_read_errors, logger_ring_high_water(), rate_hz,
                                 running, ready, channel_enabled && desired_running};
 }
 
 static void report_statistics(uint64_t now)
 {
     if (!ready || now - stats_start < 10000000) return;
+    uint32_t ring_overflows = logger_take_ring_overflows();
     if (stdio_usb_connected()) {
         printf("Sampling interval_us count=%" PRIu64 " min=%" PRIu64 " max=%" PRIu64
                " mean=%" PRIu64 " missed=%" PRIu64 " ring_overflows=%" PRIu32 " read_errors=%" PRIu64 "\n",
                intervals.count, intervals.count ? intervals.minimum : 0, intervals.count ? intervals.maximum : 0,
-               intervals.count ? intervals.sum / intervals.count : 0, missed, samples.overflows, read_errors);
+               intervals.count ? intervals.sum / intervals.count : 0, missed, ring_overflows, read_errors);
     }
     stats_start = now;
     interval_stats_reset_window(&intervals);
     missed = read_errors = 0;
-    samples.overflows = 0;
 }
 
 void sensor_poll(void)

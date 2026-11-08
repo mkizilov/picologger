@@ -86,3 +86,4 @@ reset. If LED initialization or timer registration fails, an additional
 10. For USB commands and checksummed file transfer, follow `USB_COMMANDS.md`.
 11. For persistent settings and flash safety, follow `SETTINGS.md`.
 12. For watchdog and fault-report checks, follow `WATCHDOG.md`.
+13. For dual-core jitter comparison, follow `DUAL_CORE.md`.

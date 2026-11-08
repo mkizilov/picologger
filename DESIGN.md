@@ -8,7 +8,55 @@ loop applies it to CYW43, avoiding wireless-driver calls in interrupt context.
 The banner is sent on each USB CDC connection. RP2040 reset information can
 distinguish watchdog-related resets, but not reliably identify all other causes.
 
-## Planned data path
+## Dual-core data path
+
+```text
+CORE 0                                      CORE 1
+timer IRQ -> timestamp mailbox              flash-lockout victim IRQ (control)
+ADC/DMA IRQ -> ADC diagnostic queue          storage worker
+main: BME280 I2C + USB CDC commands           |  pop BME record; encode CRC
+      ADC diagnostics + watchdog feed        |  mount/recover/list/dump
+      publish completed BME record --SPSC--> |  FatFs: 4 KiB writes + sync
+      control/status <----- SDK queues ----> |  stop/start/health/fault signals
+                                             v
+                                        SPI1 microSD
+hardware inter-core FIFO: SDK launch and flash-lockout control only
+```
+
+Core 0 is the sole ring producer; core 1 is the sole consumer and FatFs owner.
+Core 1 copies each record out before calling FatFs, so it never holds a ring
+slot or a shared lock during a card operation. A slow write cannot directly
+wait or lock the acquisition core. The 1024-record ring is bounded: if it fills,
+new records are dropped and counted while sampling continues. Shared SRAM/bus
+contention, foreground I²C/USB work, flash lockout, ADC faults and finite
+buffering can still affect timing or data integrity; there is no measured or
+absolute hardware jitter guarantee.
+
+### Ring memory ordering
+
+`src/core/spsc_ring.c` implements the common bounded SPSC algorithm. Only the
+producer writes `head`; only the consumer writes `tail`. The producer acquires
+`tail` before slot reuse, copies the whole record, then releases `head`. The
+consumer acquires `head` before copying a record and releases `tail` only after
+the copy. Unsigned counters wrap modulo 2³²; occupancy never exceeds the
+power-of-two capacity. A full ring rejects rather than overwrites.
+
+The host adapter uses C11 atomic acquire/release operations and rejects a
+non-lock-free implementation. RP2040's SDK C11 atomic fallback may use a
+spinlock, so `src/hal/spsc_index_rp2040.c` instead uses aligned 32-bit ARM
+`ldr`/`str` and `dmb` with compiler memory clobbers. RP2040 cores share SRAM;
+aligned word accesses are indivisible and there is no SRAM data cache to
+invalidate. The release barrier orders payload before index publication; the
+acquire barrier orders the observed index before payload access. This is an
+ARM/GNU compiler implementation contract, not a claim that `volatile` alone or
+portable C data races are safe. Neither ring endpoint runs in an ISR, and the
+indices have exactly one writer each. Stop-control publication is ordered after
+the last producer head update; core 1 drains before acknowledging stop.
+
+Native pthread/ThreadSanitizer tests exercise the C11 equivalent. Available
+Clang Cortex-M0 object inspection showed `ldr`, `str`, `dmb` and no atomic
+helpers in the target adapter; the pinned Arm GCC build and actual dual-core
+ordering remain unverified here. See `docs/DUAL_CORE.md` for comparison checks.
 
 Free-running 10 kHz ADC sampling uses one ADC-paced DMA channel and one chained
 control channel to fill alternating halves; completed blocks enter a bounded
@@ -28,10 +76,7 @@ card errors remain unverified. The BME280 is an I2C sensor; its once-per-second
 printing is independent of ADC DMA sampling.
 
 The Pico SDK's RP2040 atomic helpers are not lock-free and can mask interrupts.
-The BME280 sampling path instead keeps completed records in a main-loop-only
-ring, fed by a single-core timer mailbox; the main loop drains those records
-into batches for a core-1 FatFs writer. Its limitations are in
-`docs/SAMPLING.md` and `docs/SD_LOGGING.md`.
+The BME280 path uses the separate target-specific SPSC index adapter above.
 The available Apple Clang Cortex-M0 cross-target lowered 32-bit C11 atomic
 loads/stores to `__atomic_*` helper calls; that is not evidence about the pinned
 Arm GNU compiler. Before integrating the queue with RP2040 interrupts, check

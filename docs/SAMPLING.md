@@ -28,8 +28,8 @@ counted as `missed` rather than replayed with stale timestamps.
 
 The main loop raises GP15 immediately before the BME280 burst read and integer
 compensation and lowers it afterward, even if the read fails. A successful
-sample is placed in a 256-record main-loop-only ring and drained by the main
-loop into storage batches. Record fields currently
+sample is published by core 0 into a 1024-record SPSC ring and drained by the
+core-1 storage worker. Record fields currently
 hold trigger sequence, trigger timestamp, temperature in centi-°C, pressure in
 whole Pa and humidity in %RH × 1024. The latest reading also feeds the
 once-per-second display; see `SD_LOGGING.md` for storage and loss limitations.
@@ -37,10 +37,10 @@ once-per-second display; see `SD_LOGGING.md` for storage and loss limitations.
 The original C11 SPSC ring remains unchanged for contexts where its atomics
 are actually lock-free. On RP2040 the Pico SDK's Cortex-M0 atomic helpers may
 take a spinlock with interrupts masked and `atomic_is_lock_free` reports false;
-the sampling path therefore uses an explicitly **single-context** ring instead.
-The timer ISR never touches it. Do not use that local ring from an interrupt or
-another core. Its overflow count is reported; sustained storage backpressure
-can fill it and cause dropped records.
+the sampling path uses a separate RP2040 SPSC adapter with aligned word accesses
+and explicit barriers. The timer ISR never touches the ring. Overflow is
+reported; sustained storage backpressure can fill it and cause dropped records.
+See `DUAL_CORE.md` for ordering and measurement limitations.
 
 Every approximately ten seconds while the USB CDC console is connected, the
 firmware prints `Sampling interval_us count=... min=... max=... mean=...`

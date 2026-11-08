@@ -9,7 +9,6 @@ void sensor_start(void);
 void sensor_configure_boot(uint32_t rate_hz, bool enabled, bool start);
 void sensor_report_boot(void);
 void sensor_poll(void);
-bool sensor_take_sample(log_record_t *record);
 
 typedef struct {
     uint64_t samples, missed, read_errors;

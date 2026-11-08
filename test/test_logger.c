@@ -8,17 +8,16 @@
 
 static uint64_t now;
 static uint32_t incoming[16], outgoing[16];
-static unsigned int in_read, in_write, out_count, barrier_count, sample_count, sample_pos;
+static unsigned int in_read, in_write, out_count, barrier_count;
 static bool fifo_ready = true, launched, channel_ok = true;
 
 void fake_memory_barrier(void) { ++barrier_count; }
 uint64_t time_us_64(void) { return now; }
 void sleep_ms(uint32_t milliseconds) { (void)milliseconds; }
 bool stdio_usb_connected(void) { return true; }
-bool multicore_fifo_rvalid(void) { return in_read < in_write; }
-bool multicore_fifo_wready(void) { return fifo_ready; }
-uint32_t multicore_fifo_pop_blocking(void) { return incoming[in_read++]; }
-void multicore_fifo_push_blocking(uint32_t value)
+static bool fake_queue_rvalid(void) { return in_read < in_write; }
+static uint32_t fake_queue_pop(void) { return incoming[in_read++]; }
+static void fake_queue_push(uint32_t value)
 {
     TEST_ASSERT_TRUE(fifo_ready);
     TEST_ASSERT_TRUE(out_count < 16);
@@ -27,14 +26,15 @@ void multicore_fifo_push_blocking(uint32_t value)
 bool logger_channel_init(void) { return channel_ok; }
 bool logger_channel_to_worker(uint32_t value)
 {
+    TEST_ASSERT_TRUE((value & UINT32_C(0xf0000000)) != 0);
     if (!fifo_ready) return false;
-    multicore_fifo_push_blocking(value);
+    fake_queue_push(value);
     return true;
 }
 bool logger_channel_from_worker(uint32_t *value)
 {
-    if (!multicore_fifo_rvalid()) return false;
-    *value = multicore_fifo_pop_blocking();
+    if (!fake_queue_rvalid()) return false;
+    *value = fake_queue_pop();
     return true;
 }
 void logger_channel_to_main(uint32_t value) { (void)value; }
@@ -55,32 +55,23 @@ bool sd_storage_list_close(void) { return true; }
 bool sd_storage_dump_open(const char *name) { (void)name; return false; }
 bool sd_storage_dump_read(uint8_t *data, size_t size, size_t *read) { (void)data; (void)size; (void)read; return false; }
 bool sd_storage_dump_close(void) { return true; }
-bool sensor_take_sample(log_record_t *record)
-{
-    if (sample_pos == sample_count) return false;
-    *record = (log_record_t){.sequence = sample_pos++, .timestamp_us = now};
-    return true;
-}
 void setUp(void) {}
 void tearDown(void) {}
 
-static void batches_are_nonblocking_and_ownership_is_returned(void)
+static void ring_data_and_control_messages_are_independent(void)
 {
     logger_start();
     TEST_ASSERT_TRUE(launched);
-    for (unsigned int i = 0; i < 4; ++i) {
-        sample_count += 2;
-        logger_poll();
-        TEST_ASSERT_EQUAL_UINT(i, out_count);
-        now += UINT64_C(1000000);
-        logger_poll();
-        TEST_ASSERT_EQUAL_UINT(i + 1, out_count);
-        TEST_ASSERT_EQUAL_UINT(i, outgoing[i]);
-    }
-    sample_count += 2;
+    log_record_t record = {0};
+    for (unsigned int i = 0; i < LOGGER_SAMPLE_RING_CAPACITY; ++i) TEST_ASSERT_TRUE(logger_submit_sample(&record));
+    TEST_ASSERT_EQUAL_UINT(LOGGER_SAMPLE_RING_CAPACITY, logger_ring_level());
+    TEST_ASSERT_EQUAL_UINT(LOGGER_SAMPLE_RING_CAPACITY, logger_ring_high_water());
+    TEST_ASSERT_FALSE(logger_submit_sample(&record));
+    TEST_ASSERT_FALSE(logger_submit_sample(&record));
+    TEST_ASSERT_EQUAL_UINT32(2, logger_take_ring_overflows());
+    TEST_ASSERT_EQUAL_UINT32(0, logger_take_ring_overflows());
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT(8, sample_pos);
-    logger_note_drop(2);
+    TEST_ASSERT_EQUAL_UINT(0, out_count);
     incoming[in_write++] = UINT32_C(0x10000003);
     incoming[in_write++] = UINT32_C(0x20000002);
     incoming[in_write++] = UINT32_C(0x30002ee0);
@@ -88,25 +79,21 @@ static void batches_are_nonblocking_and_ownership_is_returned(void)
     incoming[in_write++] = UINT32_C(0x60000007);
     incoming[in_write++] = UINT32_C(0x70000002);
     incoming[in_write++] = UINT32_C(0x40000001);
-    incoming[in_write++] = 0;
     now = UINT64_C(10000000);
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT(10, sample_pos);
-    TEST_ASSERT_TRUE(barrier_count >= 9);
+    TEST_ASSERT_TRUE(barrier_count >= 7);
     fifo_ready = false;
     now += UINT64_C(1000000);
+    TEST_ASSERT_TRUE(logger_request_stop());
+    TEST_ASSERT_FALSE(logger_submit_sample(&record));
+    TEST_ASSERT_EQUAL_UINT32(0, logger_take_ring_overflows());
+    TEST_ASSERT_FALSE(logger_request_start(25));
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT(4, out_count);
+    TEST_ASSERT_EQUAL_UINT(0, out_count);
     fifo_ready = true;
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT(5, out_count);
-    TEST_ASSERT_EQUAL_UINT(0, outgoing[4]);
-    TEST_ASSERT_TRUE(logger_request_stop());
-    TEST_ASSERT_FALSE(logger_request_start(25));
-    incoming[in_write++] = 1;
-    logger_poll();
-    TEST_ASSERT_EQUAL_UINT(6, out_count);
-    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0x80000000), outgoing[5]);
+    TEST_ASSERT_EQUAL_UINT(1, out_count);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0x80000000), outgoing[0]);
     incoming[in_write++] = UINT32_C(0x80000001);
     logger_poll();
     logger_status_t status;
@@ -117,13 +104,13 @@ static void batches_are_nonblocking_and_ownership_is_returned(void)
     logger_poll();
     TEST_ASSERT_TRUE(logger_flash_prepare());
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000003), outgoing[6]);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000003), outgoing[1]);
     incoming[in_write++] = UINT32_C(0xf0000004);
     logger_poll();
     TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_READY, logger_flash_state());
     TEST_ASSERT_TRUE(logger_flash_release());
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000006), outgoing[7]);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000006), outgoing[2]);
     incoming[in_write++] = UINT32_C(0xf0000007);
     logger_poll();
     TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
@@ -132,18 +119,18 @@ static void batches_are_nonblocking_and_ownership_is_returned(void)
     TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
     TEST_ASSERT_TRUE(logger_flash_prepare());
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000003), outgoing[8]);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000003), outgoing[3]);
     TEST_ASSERT_TRUE(logger_flash_release());
     TEST_ASSERT_FALSE(logger_request_list());
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000006), outgoing[9]);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000006), outgoing[4]);
     incoming[in_write++] = UINT32_C(0xf0000004);
     incoming[in_write++] = UINT32_C(0xf0000007);
     logger_poll();
     TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
     TEST_ASSERT_TRUE(logger_request_start(25));
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0x90000019), outgoing[10]);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0x90000019), outgoing[5]);
     incoming[in_write++] = UINT32_C(0x90000001);
     logger_poll();
     logger_get_status(&status);
@@ -157,8 +144,8 @@ static void missing_channel_fails_closed_without_hanging(void)
     TEST_ASSERT_FALSE(launched);
     TEST_ASSERT_FALSE(logger_request_list());
     TEST_ASSERT_FALSE(logger_flash_prepare());
-    sample_count = 3;
-    logger_poll();
+    log_record_t record = {0};
+    for (unsigned int i = 0; i < 3; ++i) TEST_ASSERT_FALSE(logger_submit_sample(&record));
     logger_status_t status;
     logger_get_status(&status);
     TEST_ASSERT_EQUAL_INT(LOGGER_STOPPED, status.state);
@@ -175,19 +162,17 @@ static void flash_without_lockout_initialization_is_rejected(void)
     TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
 }
 
-static void partial_batch_is_submitted_after_100ms(void)
+static void sample_publication_never_sends_payload_messages(void)
 {
     logger_start();
-    sample_count = 1;
+    log_record_t record = {.sequence = 123};
+    TEST_ASSERT_TRUE(logger_submit_sample(&record));
     logger_poll();
     TEST_ASSERT_EQUAL_UINT(0, out_count);
-    now = 99999;
+    now = UINT64_C(1000000);
     logger_poll();
     TEST_ASSERT_EQUAL_UINT(0, out_count);
-    now = 100000;
-    logger_poll();
-    TEST_ASSERT_EQUAL_UINT(1, out_count);
-    TEST_ASSERT_EQUAL_UINT32(0, outgoing[0]);
+    TEST_ASSERT_EQUAL_UINT(1, logger_ring_level());
 }
 
 int main(int argc, char **argv)
@@ -195,8 +180,8 @@ int main(int argc, char **argv)
     UNITY_BEGIN();
     if (argc == 2 && !strcmp(argv[1], "no_channel")) RUN_TEST(missing_channel_fails_closed_without_hanging);
     else if (argc == 2 && !strcmp(argv[1], "no_flash")) RUN_TEST(flash_without_lockout_initialization_is_rejected);
-    else if (argc == 2 && !strcmp(argv[1], "batch_latency")) RUN_TEST(partial_batch_is_submitted_after_100ms);
-    else if (argc == 1) RUN_TEST(batches_are_nonblocking_and_ownership_is_returned);
+    else if (argc == 2 && !strcmp(argv[1], "ring_only")) RUN_TEST(sample_publication_never_sends_payload_messages);
+    else if (argc == 1) RUN_TEST(ring_data_and_control_messages_are_independent);
     else return 1;
     return UNITY_END();
 }

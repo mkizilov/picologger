@@ -21,10 +21,10 @@ static pthread_t worker_thread;
 static pthread_key_t core_key;
 static int worker_marker;
 static void (*test_worker_entry)(void);
-static atomic_bool stop_worker, media, hold_mount, hold_dump_read;
-static atomic_uint returned_batches, opened_files, closed_files, mount_attempts, entered_dump_read, presence_calls;
+static atomic_bool stop_worker, media, hold_mount, hold_dump_read, hold_write;
+static atomic_uint opened_files, closed_files, mount_attempts, entered_dump_read, entered_write, presence_calls;
 static atomic_uint_fast64_t clock_us;
-static unsigned int pending_samples, next_sequence;
+static unsigned int next_sequence;
 static uint8_t files[3][8192];
 static size_t file_sizes[3];
 static int active_file = -1;
@@ -55,7 +55,7 @@ void sleep_ms(uint32_t milliseconds)
 }
 bool stdio_usb_connected(void) { return false; }
 
-bool multicore_fifo_rvalid(void)
+static bool fake_queue_rvalid(void)
 {
     fifo_t *fifo = on_worker() ? &to_worker : &to_main;
     (void)pthread_mutex_lock(&fifo_lock);
@@ -63,7 +63,7 @@ bool multicore_fifo_rvalid(void)
     (void)pthread_mutex_unlock(&fifo_lock);
     return valid;
 }
-bool multicore_fifo_wready(void)
+static bool fake_queue_wready(void)
 {
     fifo_t *fifo = on_worker() ? &to_main : &to_worker;
     (void)pthread_mutex_lock(&fifo_lock);
@@ -71,7 +71,7 @@ bool multicore_fifo_wready(void)
     (void)pthread_mutex_unlock(&fifo_lock);
     return ready;
 }
-uint32_t multicore_fifo_pop_blocking(void)
+static uint32_t fake_queue_pop(void)
 {
     fifo_t *fifo = on_worker() ? &to_worker : &to_main;
     (void)pthread_mutex_lock(&fifo_lock);
@@ -80,7 +80,7 @@ uint32_t multicore_fifo_pop_blocking(void)
     (void)pthread_mutex_unlock(&fifo_lock);
     return value;
 }
-void multicore_fifo_push_blocking(uint32_t value)
+static void fake_queue_push(uint32_t value)
 {
     fifo_t *fifo = on_worker() ? &to_main : &to_worker;
     for (;;) {
@@ -88,8 +88,6 @@ void multicore_fifo_push_blocking(uint32_t value)
         if (fifo->head - fifo->tail < 8) {
             fifo->values[fifo->head++ & 7u] = value;
             (void)pthread_mutex_unlock(&fifo_lock);
-            if (on_worker() && (value & UINT32_C(0xf0000000)) == 0)
-                (void)atomic_fetch_add(&returned_batches, 1);
             return;
         }
         (void)pthread_mutex_unlock(&fifo_lock);
@@ -99,21 +97,26 @@ void multicore_fifo_push_blocking(uint32_t value)
 bool logger_channel_init(void) { return true; }
 bool logger_channel_to_worker(uint32_t value)
 {
-    if (!multicore_fifo_wready()) return false;
-    multicore_fifo_push_blocking(value);
+    if ((value & UINT32_C(0xf0000000)) == 0) abort();
+    if (!fake_queue_wready()) return false;
+    fake_queue_push(value);
     return true;
 }
 bool logger_channel_from_worker(uint32_t *value)
 {
-    if (!multicore_fifo_rvalid()) return false;
-    *value = multicore_fifo_pop_blocking();
+    if (!fake_queue_rvalid()) return false;
+    *value = fake_queue_pop();
     return true;
 }
-void logger_channel_to_main(uint32_t value) { multicore_fifo_push_blocking(value); }
+void logger_channel_to_main(uint32_t value)
+{
+    if ((value & UINT32_C(0xf0000000)) == 0) abort();
+    fake_queue_push(value);
+}
 bool logger_channel_from_main(uint32_t *value)
 {
-    if (!multicore_fifo_rvalid()) return false;
-    *value = multicore_fifo_pop_blocking();
+    if (!fake_queue_rvalid()) return false;
+    *value = fake_queue_pop();
     return true;
 }
 bool flash_safe_execute_core_init(void) { return true; }
@@ -132,14 +135,14 @@ void multicore_launch_core1_with_stack(void (*entry)(void), uint32_t *stack, siz
     if (pthread_key_create(&core_key, NULL) != 0) abort();
     if (pthread_create(&worker_thread, NULL, run_worker, NULL) != 0) abort();
 }
-bool sensor_take_sample(log_record_t *record)
+static void publish_samples(unsigned int count)
 {
-    if (!pending_samples) return false;
-    --pending_samples;
-    *record = (log_record_t){.sequence = next_sequence, .timestamp_us = next_sequence * UINT64_C(20000),
-        .values = {(int32_t)next_sequence, 100000, 50000, 0}};
-    ++next_sequence;
-    return true;
+    while (count--) {
+        log_record_t record = {.sequence = next_sequence, .timestamp_us = next_sequence * UINT64_C(20000),
+            .values = {(int32_t)next_sequence, 100000, 50000, 0}};
+        ++next_sequence;
+        TEST_ASSERT_TRUE(logger_submit_sample(&record));
+    }
 }
 void sensor_get_status(sensor_status_t *status) { *status = (sensor_status_t){0}; }
 bool adc_app_pause_for_flash(bool *was_running)
@@ -215,6 +218,8 @@ static int fs_create(void *ctx, const char *name, const uint8_t *header, size_t 
 static bool fs_write(void *ctx, const uint8_t *data, size_t length, size_t *written)
 {
     (void)ctx;
+    (void)atomic_fetch_add(&entered_write, 1);
+    while (atomic_load(&hold_write)) wait_briefly();
     if ((uintptr_t)data % 512u != 0) abort();
     if (!atomic_load(&media) || active_file < 0 || file_sizes[active_file] + length > sizeof(files[0])) {
         *written = 0;
@@ -338,6 +343,18 @@ static bool pump_state(logger_state_t desired)
     return false;
 }
 
+static bool pump_dropped(uint64_t target)
+{
+    for (unsigned int i = 0; i < 2000; ++i) {
+        logger_poll();
+        logger_status_t status;
+        logger_get_status(&status);
+        if (status.dropped >= target) return true;
+        wait_briefly();
+    }
+    return false;
+}
+
 static bool pump_flash_state(logger_flash_state_t desired)
 {
     for (unsigned int i = 0; i < 2000; ++i) {
@@ -359,13 +376,13 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     atomic_store(&hold_mount, true);
     logger_start();
     TEST_ASSERT_TRUE(pump_until(&mount_attempts, 1));
-    pending_samples = 10;
-    logger_poll();
+    publish_samples(10);
+    TEST_ASSERT_EQUAL_UINT(10, logger_ring_level());
     atomic_store(&clock_us, UINT64_C(1000001));
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT(0, atomic_load(&returned_batches));
+    TEST_ASSERT_EQUAL_UINT(10, logger_ring_level());
     atomic_store(&hold_mount, false);
-    TEST_ASSERT_TRUE(pump_until(&returned_batches, 1));
+    TEST_ASSERT_TRUE(pump_dropped(10));
     TEST_ASSERT_FALSE(logger_take_fault_logged());
     atomic_store(&media, true);
     atomic_store(&clock_us, UINT64_C(5000000));
@@ -373,14 +390,22 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     for (unsigned int i = 0; i < 20; ++i) { logger_poll(); wait_briefly(); }
     TEST_ASSERT_TRUE(logger_take_fault_logged());
     TEST_ASSERT_FALSE(logger_take_fault_logged());
-    pending_samples = 256;
+    atomic_store(&hold_write, true);
+    publish_samples(128);
+    TEST_ASSERT_TRUE(pump_until(&entered_write, 1));
+    publish_samples(128);
+    TEST_ASSERT_EQUAL_UINT(128, logger_ring_level());
+    TEST_ASSERT_TRUE(logger_ring_high_water() >= 128);
+    atomic_store(&hold_write, false);
     TEST_ASSERT_TRUE(pump_until(&closed_files, 1));
-    while (pending_samples) { logger_poll(); wait_briefly(); }
+    for (unsigned int i = 0; i < 2000 && logger_ring_level(); ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_EQUAL_UINT(0, logger_ring_level());
     for (unsigned int i = 0; i < 20; ++i) { logger_poll(); wait_briefly(); }
     logger_status_t observed_progress;
     logger_get_status(&observed_progress);
     TEST_ASSERT_TRUE(observed_progress.worker_progress > 0);
     TEST_ASSERT_TRUE(observed_progress.writer_progress > 0);
+    TEST_ASSERT_TRUE(observed_progress.ring_progress > 0);
     TEST_ASSERT_TRUE(observed_progress.physical_observed);
     TEST_ASSERT_TRUE(observed_progress.physical_progress > 0);
     TEST_ASSERT_TRUE(logger_request_list());
@@ -390,9 +415,8 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     TEST_ASSERT_TRUE(logger_request_dump("LOG_0001.BIN"));
     TEST_ASSERT_TRUE(collect_dump_start());
     TEST_ASSERT_TRUE(pump_until(&entered_dump_read, 1));
-    pending_samples = 5;
-    for (unsigned int i = 0; i < 100 && pending_samples; ++i) { logger_poll(); wait_briefly(); }
-    TEST_ASSERT_EQUAL_UINT(0, pending_samples);
+    publish_samples(5);
+    TEST_ASSERT_EQUAL_UINT(5, logger_ring_level());
     atomic_store(&hold_dump_read, false);
     TEST_ASSERT_TRUE(collect_io(true));
     TEST_ASSERT_TRUE(logger_request_stop());
@@ -449,6 +473,7 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     TEST_ASSERT_EQUAL_UINT32(8, header.fault_boot_id[1]);
     TEST_ASSERT_EQUAL_UINT32(0x10001234, header.fault[1].pc);
     TEST_ASSERT_EQUAL_UINT(3, atomic_load(&opened_files));
+    TEST_ASSERT_EQUAL_UINT(LOG_HEADER_V2_SIZE + 21 * LOG_RECORD_SIZE, file_sizes[1]);
     TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, files[2], file_sizes[2]));
     TEST_ASSERT_EQUAL_UINT32(25, header.sample_rate_hz);
     for (unsigned int i = 0; i < 240; ++i) {
@@ -538,12 +563,49 @@ static void config_save_coordinates_real_logger_guard_and_adc(void)
     TEST_ASSERT_EQUAL_INT(0, pthread_key_delete(core_key));
 }
 
+static void stop_waits_for_all_previously_published_records(void)
+{
+    atomic_store(&media, true);
+    logger_start();
+    TEST_ASSERT_TRUE(pump_until(&opened_files, 1));
+    atomic_store(&hold_write, true);
+    publish_samples(128);
+    TEST_ASSERT_TRUE(pump_until(&entered_write, 1));
+    publish_samples(128);
+    TEST_ASSERT_EQUAL_UINT(128, logger_ring_level());
+    TEST_ASSERT_TRUE(logger_request_stop());
+    log_record_t rejected = {.sequence = 999};
+    TEST_ASSERT_FALSE(logger_submit_sample(&rejected));
+    for (unsigned int i = 0; i < 20; ++i) { logger_poll(); wait_briefly(); }
+    logger_status_t status;
+    logger_get_status(&status);
+    TEST_ASSERT_EQUAL_INT(LOGGER_STOPPING, status.state);
+    TEST_ASSERT_EQUAL_UINT(128, logger_ring_level());
+    atomic_store(&hold_write, false);
+    TEST_ASSERT_TRUE(pump_state(LOGGER_STOPPED));
+    atomic_store(&stop_worker, true);
+    for (unsigned int i = 0; i < 16; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(worker_thread, NULL));
+    TEST_ASSERT_EQUAL_INT(0, pthread_key_delete(core_key));
+    TEST_ASSERT_EQUAL_UINT(8192, file_sizes[0]);
+    TEST_ASSERT_EQUAL_UINT(LOG_HEADER_V2_SIZE + 16 * LOG_RECORD_SIZE, file_sizes[1]);
+    for (unsigned int i = 0; i < 256; ++i) {
+        unsigned int file = i < 240 ? 0 : 1;
+        unsigned int index = i < 240 ? i : i - 240;
+        log_record_t record;
+        TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_record(&record,
+            files[file] + LOG_HEADER_V2_SIZE + index * LOG_RECORD_SIZE, LOG_RECORD_SIZE));
+        TEST_ASSERT_EQUAL_UINT32(i, record.sequence);
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 2) return 1;
     UNITY_BEGIN();
     if (argc == 2 && !strcmp(argv[1], "boot_stopped")) RUN_TEST(boot_stopped_opens_no_file_until_start);
     else if (argc == 2 && !strcmp(argv[1], "config_guard")) RUN_TEST(config_save_coordinates_real_logger_guard_and_adc);
+    else if (argc == 2 && !strcmp(argv[1], "stop_backlog")) RUN_TEST(stop_waits_for_all_previously_published_records);
     else {
         if (argc == 2) output_file = argv[1];
         RUN_TEST(records_cross_cores_survive_retry_and_rotate);

@@ -9,7 +9,7 @@
 #include "log_writer.h"
 #include "logger_channel.h"
 #include "sd_storage.h"
-#include "sensor.h"
+#include "spsc_ring.h"
 #include "hardware/sync.h"
 #include "pico/multicore.h"
 #include "pico/flash.h"
@@ -23,10 +23,8 @@
 #define PICOLOGGER_LOG_ROTATE_BYTES 16777216u
 #endif
 
-enum { BATCH_COUNT = 4 };
 #define MSG_KIND_MASK UINT32_C(0xf0000000)
 #define MSG_VALUE_MASK UINT32_C(0x0fffffff)
-#define MSG_FREE UINT32_C(0x00000000)
 #define MSG_DROPPED UINT32_C(0x10000000)
 #define MSG_UNCERTAIN UINT32_C(0x20000000)
 #define MSG_WORST UINT32_C(0x30000000)
@@ -44,28 +42,24 @@ enum { BATCH_COUNT = 4 };
 #define MSG_FLASH UINT32_C(0xf0000000)
 enum { FLASH_INIT_OK = 1, FLASH_INIT_FAILED, FLASH_PREPARE, FLASH_READY, FLASH_REJECTED,
        FLASH_RESUME, FLASH_RELEASED, FLASH_WORKER_PROGRESS, FLASH_WRITER_PROGRESS, FLASH_FAULT_LOGGED,
-       FLASH_PHYSICAL_PROGRESS };
+       FLASH_PHYSICAL_PROGRESS, FLASH_RING_PROGRESS };
 
-typedef struct {
-    _Alignas(512) uint8_t bytes[LOG_WRITE_CHUNK];
-    uint32_t count;
-} log_batch_t;
-
-/* Queue messages transfer ownership. Only the owning core may access a batch. */
-static log_batch_t batches[BATCH_COUNT];
+static spsc_ring_t sample_ring;
+static log_record_t sample_slots[LOGGER_SAMPLE_RING_CAPACITY];
 static log_writer_t writer;
 _Alignas(8) static uint32_t storage_stack[2048];
-static unsigned int free_mask;
-static int active_batch = -1;
-static uint64_t batch_started, next_report, dropped, uncertain, worst_write_us, worst_sync_us;
+static uint64_t next_report, dropped, uncertain, worst_write_us, worst_sync_us;
 static uint64_t recovered_bytes, recovery_errors;
 static bool online, control_ok = true;
-static bool channel_available, flash_supported, flash_control_sent;
+static bool channel_available, ring_available, flash_supported, flash_control_sent;
+static uint32_t ring_high_water;
+static uint32_t ring_overflows;
 static logger_flash_state_t flash_state = LOGGER_FLASH_IDLE;
 static logger_state_t state = LOGGER_RUNNING;
 static bool control_sent;
 static uint32_t start_rate, current_file;
 static uint32_t worker_progress, writer_progress, physical_progress;
+static uint32_t ring_progress;
 static bool physical_observed;
 static uint64_t physical_at_us;
 static uint32_t boot_rate = PICOLOGGER_SAMPLE_RATE_HZ, boot_rotate = PICOLOGGER_LOG_ROTATE_BYTES;
@@ -223,11 +217,12 @@ static void storage_worker(void)
     uint64_t sent_dropped = 0, sent_uncertain = 0, sent_worst = 0, sent_sync = 0;
     uint64_t sent_recovered = 0, sent_recovery_errors = 0;
     uint64_t sent_accepted = 0, sent_writes = 0;
+    uint32_t consumed = 0, sent_consumed = 0;
     bool last_online = false, status_sent = false;
     bool fault_log_notified = false;
     unsigned int last_file = 0;
     worker_io_t io = {0};
-    bool flash_quiesced = false;
+    bool flash_quiesced = false, stop_pending = false;
     for (;;) {
         if (initialized && !flash_quiesced) log_writer_maintain(&writer);
         bool current_online = initialized && writer.online;
@@ -239,14 +234,8 @@ static void storage_worker(void)
         uint32_t index;
         if (logger_channel_from_main(&index)) {
             __dmb();
-            if (index < BATCH_COUNT) {
-                if (initialized && !flash_quiesced) log_writer_append(&writer, batches[index].bytes, batches[index].count);
-                else writer.dropped += batches[index].count;
-                __dmb();
-                logger_channel_to_main(MSG_FREE | index);
-            } else if (index == MSG_STOP) {
-                bool ok = initialized && log_writer_pause(&writer);
-                logger_channel_to_main(MSG_STOP | (ok ? 1u : 0u));
+            if (index == MSG_STOP) {
+                stop_pending = true;
             } else if ((index & MSG_KIND_MASK) == MSG_START) {
                 bool ok = initialized && !flash_quiesced && log_writer_resume(&writer, index & MSG_VALUE_MASK);
                 logger_channel_to_main(MSG_START | (ok ? 1u : 0u));
@@ -261,7 +250,8 @@ static void storage_worker(void)
                 worker_io_close(&io);
                 logger_channel_to_main(MSG_IO_CANCEL);
             } else if (index == (MSG_FLASH | FLASH_PREPARE)) {
-                if (lockout_ready && initialized && !writer.enabled && !writer.file_open && !io.kind) {
+                if (lockout_ready && initialized && !writer.enabled && !writer.file_open && !io.kind &&
+                    !stop_pending && spsc_ring_empty(&sample_ring)) {
                     flash_quiesced = true;
                     logger_channel_to_main(MSG_FLASH | FLASH_READY);
                 } else logger_channel_to_main(MSG_FLASH | FLASH_REJECTED);
@@ -269,6 +259,22 @@ static void storage_worker(void)
                 flash_quiesced = false;
                 logger_channel_to_main(MSG_FLASH | FLASH_RELEASED);
             }
+        }
+        if (!flash_quiesced && (writer.enabled || !initialized)) {
+            for (unsigned int n = 0; n < 8; ++n) {
+                log_record_t record;
+                if (!spsc_ring_pop(&sample_ring, &record)) break;
+                ++consumed;
+                uint8_t encoded[LOG_RECORD_SIZE];
+                if (initialized && log_encode_record(encoded, sizeof(encoded), &record) == LOG_OK)
+                    log_writer_append(&writer, encoded, 1);
+                else ++writer.dropped;
+            }
+        }
+        if (stop_pending && !flash_quiesced && spsc_ring_empty(&sample_ring)) {
+            bool ok = initialized && log_writer_pause(&writer);
+            stop_pending = false;
+            logger_channel_to_main(MSG_STOP | (ok ? 1u : 0u));
         }
         if (!flash_quiesced) worker_io_step(&io, initialized && writer.online);
         unsigned int file_number = initialized ? writer.current_number : 0;
@@ -284,6 +290,10 @@ static void storage_worker(void)
         send_delta(MSG_UNCERTAIN, &sent_uncertain, writer.uncertain);
         send_delta(MSG_RECOVERED, &sent_recovered, writer.recovered_bytes);
         send_delta(MSG_RECOVERY_ERRORS, &sent_recovery_errors, writer.recovery_errors);
+        if (consumed != sent_consumed) {
+            sent_consumed = consumed;
+            logger_channel_to_main(MSG_FLASH | FLASH_RING_PROGRESS);
+        }
         if (initialized && writer.accepted_records != sent_accepted) {
             sent_accepted = writer.accepted_records;
             logger_channel_to_main(MSG_FLASH | FLASH_WRITER_PROGRESS);
@@ -310,9 +320,10 @@ static void storage_worker(void)
 void logger_start(void)
 {
     state = boot_logging ? LOGGER_RUNNING : LOGGER_STOPPED;
-    free_mask = (1u << BATCH_COUNT) - 1u;
     next_report = time_us_64() + UINT64_C(10000000);
-    channel_available = logger_channel_init();
+    ring_available = spsc_ring_init(&sample_ring, sample_slots, sizeof(sample_slots), LOGGER_SAMPLE_RING_CAPACITY,
+                                    sizeof(sample_slots[0]));
+    channel_available = ring_available && logger_channel_init();
     if (!channel_available) { state = LOGGER_STOPPED; return; }
     __dmb();
     multicore_launch_core1_with_stack(storage_worker, storage_stack, sizeof(storage_stack));
@@ -333,7 +344,33 @@ bool logger_take_fault_logged(void)
     return logged;
 }
 
-void logger_note_drop(uint32_t count) { dropped += count; }
+bool logger_submit_sample(const log_record_t *record)
+{
+    uint32_t level = 0;
+    if (!channel_available || state != LOGGER_RUNNING) {
+        ++dropped;
+        return false;
+    }
+    if (!spsc_ring_push(&sample_ring, record, &level)) {
+        ++dropped;
+        ++ring_overflows;
+        return false;
+    }
+    if (level > ring_high_water) ring_high_water = level;
+    return true;
+}
+
+uint32_t logger_ring_level(void)
+{
+    return ring_available ? spsc_ring_producer_level(&sample_ring) : 0;
+}
+uint32_t logger_ring_high_water(void) { return ring_high_water; }
+uint32_t logger_take_ring_overflows(void)
+{
+    uint32_t value = ring_overflows;
+    ring_overflows = 0;
+    return value;
+}
 
 bool logger_request_stop(void)
 {
@@ -356,7 +393,8 @@ bool logger_request_start(uint32_t rate_hz)
 void logger_get_status(logger_status_t *status)
 {
     *status = (logger_status_t){state, online, control_ok, current_file, dropped, uncertain,
-                                worker_progress, writer_progress, physical_progress, physical_observed, physical_at_us};
+                                worker_progress, writer_progress, physical_progress, physical_observed, physical_at_us,
+                                ring_progress};
 }
 
 bool logger_io_busy(void) { return !channel_available || io_busy || io_ack_pending || io_cancel_pending || flash_state != LOGGER_FLASH_IDLE; }
@@ -433,17 +471,12 @@ void logger_report_boot(void)
 
 void logger_poll(void)
 {
-    if (!channel_available) {
-        log_record_t discarded;
-        for (unsigned int n = 0; n < 8 && sensor_take_sample(&discarded); ++n) ++dropped;
-        return;
-    }
+    if (!channel_available) return;
     uint32_t message;
     for (unsigned int n = 0; n < 8 && logger_channel_from_worker(&message); ++n) {
         __dmb();
         uint32_t value = message & MSG_VALUE_MASK;
         switch (message & MSG_KIND_MASK) {
-            case MSG_FREE: if (value < BATCH_COUNT) free_mask |= 1u << value; break;
             case MSG_DROPPED: dropped += value; break;
             case MSG_UNCERTAIN: uncertain += value; break;
             case MSG_WORST: if (value > worst_write_us) worst_write_us = value; break;
@@ -471,6 +504,7 @@ void logger_poll(void)
                 else if (value == FLASH_PHYSICAL_PROGRESS) {
                     ++physical_progress; physical_observed = true; physical_at_us = time_us_64();
                 }
+                else if (value == FLASH_RING_PROGRESS) ++ring_progress;
                 break;
             default: break;
         }
@@ -486,41 +520,10 @@ void logger_poll(void)
         if (logger_channel_to_worker(MSG_IO_REQUEST)) io_request_pending = false;
     }
     uint64_t now = time_us_64();
-    if ((state == LOGGER_RUNNING || (state == LOGGER_STOPPING && !control_sent)) && active_batch < 0 && free_mask) {
-        for (unsigned int i = 0; i < BATCH_COUNT; ++i) {
-            if (free_mask & (1u << i)) {
-                active_batch = (int)i;
-                free_mask &= ~(1u << i);
-                batches[i].count = 0;
-                break;
-            }
-        }
-    }
-    bool drained = false;
-    if (active_batch >= 0 && (state == LOGGER_RUNNING || (state == LOGGER_STOPPING && !control_sent))) {
-        log_batch_t *batch = &batches[active_batch];
-        log_record_t record;
-        for (unsigned int n = 0; n < 8 && batch->count < LOG_RECORDS_PER_BATCH; ++n) {
-            if (!sensor_take_sample(&record)) { drained = true; break; }
-            if (!batch->count) batch_started = now;
-            if (log_encode_record(batch->bytes + batch->count * LOG_RECORD_SIZE, LOG_RECORD_SIZE, &record) != LOG_OK) {
-                ++dropped;
-                continue;
-            }
-            ++batch->count;
-        }
-        if (batch->count && (batch->count == LOG_RECORDS_PER_BATCH || now - batch_started >= UINT64_C(100000) ||
-                             (state == LOGGER_STOPPING && drained))) {
-            __dmb();
-            if (logger_channel_to_worker((uint32_t)active_batch)) active_batch = -1;
-        }
-        if (state == LOGGER_STOPPING && drained && active_batch >= 0 && !batch->count) {
-            free_mask |= 1u << active_batch;
-            active_batch = -1;
-        }
-    }
-    if (state == LOGGER_STOPPING && drained && active_batch < 0 && !control_sent && logger_channel_to_worker(MSG_STOP)) {
-        control_sent = true;
+    if (state == LOGGER_STOPPING && !control_sent) {
+        /* Publish the last accepted head before the stop-control message. */
+        __dmb();
+        if (logger_channel_to_worker(MSG_STOP)) control_sent = true;
     }
     if (state == LOGGER_STARTING && !control_sent && logger_channel_to_worker(MSG_START | start_rate)) {
         control_sent = true;

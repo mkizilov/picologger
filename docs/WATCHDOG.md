@@ -10,10 +10,13 @@ it feeds only after all currently required progress sources have advanced:
 * The storage core must report a heartbeat, including while SD is offline or
   logging is stopped. Successful reads during a long recovery scan also count as
   storage-core progress. A blocked storage call stops the heartbeat.
+* While BME sampling/logging is running, core 1 must drain the shared ring,
+  including while SD is offline and records are being counted as dropped.
 * While BME logging is running and SD is online, the worker must accept records
   into its write buffer and must also have completed a successful FatFs
   `f_write` (the synced header counts). This is not proof that the card has
-  physically committed the data. Batches are submitted after at most about 100 ms.
+  physically committed the data. Core 1 drains the shared ring when not blocked
+  in storage work; the former core-0 batch stage has been removed.
   Worker, sampling and accepted-record freshness use a 1.5 s window. The
   physical-write window is `ceil(128 / rate_hz) + 2` seconds because a 4 KiB
   chunk contains 128 records; this is 5 s at 50 Hz and 130 s at 1 Hz. A blocked
@@ -25,7 +28,7 @@ while offline; the worker heartbeat and enabled sampling checks remain required.
 The watchdog timeout starts from the last feed, so a stalled source normally
 causes reset after its freshness window plus up to two seconds, not exactly two
 seconds after the stall. `status` reports `watchdog_missing` as bits: 1 BME,
-2 ADC, 4 storage worker, 8 accepted records, 16 physical write. The last mask
+2 ADC, 4 storage worker, 8 accepted records, 16 physical write, 32 ring drain. The last mask
 observed before a watchdog timeout is retained when possible; zero means unknown
 or no recorded missing source, not proof of a healthy prior run.
 
