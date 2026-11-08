@@ -8,8 +8,8 @@ cannot preserve the old slot while that sector is erased. The firmware copies
 the SDK's RP2040 linker script at configure time and asserts that the image
 ends before the reserved sectors; the flash adapter also checks the link address
 against `PICO_FLASH_SIZE_BYTES` and refuses writes on a mismatch. Use the Pico
-or Pico W's correct flash-size configuration. The linker/firmware build has not
-been verified in this environment.
+or Pico W's correct flash-size configuration. Pico and Pico W firmware link with
+the pinned toolchain; physical flash layout and behavior have not been verified.
 
 Each slot occupies one programmed 256-byte page in its own sector. It contains
 magic, format version, a 32-bit revision, values and CRC32; remaining bytes are

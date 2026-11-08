@@ -18,13 +18,17 @@ the format, wiring, batching and durability limits.
    number, `recovered_bytes`, `recovery_errors`, `dropped` and `uncertain`.
    Do not remove or hot-swap the card during the ten trials.
 3. After trial ten, allow recovery to finish, send USB `stop` and wait for
-   `@OK stopped`. For a final inspection pass, power down, disconnect the
-   BME280 while unpowered, then boot once more with the card still inserted.
-   Wait for `SD online=1`, send `stop` and wait for `@OK stopped`. With no
-   sensor samples, the new file should contain only its synced header. Power
-   down and move the card to a computer. These extra power cycles are
-   preparation/inspection, not part of the ten trials; there is no eject
-   command, so even this procedure cannot eliminate all write risk.
+   `@OK stopped`. Record the original `config get` values. To perform a final
+   recovery pass without producing more BME records, send `config set channels 0`,
+   wait for `@OK config ...` and confirm the saved value with `config get`;
+   abort this inspection pass if the save fails or is uncertain. Reboot with the
+   card still inserted. This disables
+   BME and ADC; the storage worker still mounts and recovers the
+   newest log without creating a new one. Wait for `SD online=1`, record the
+   recovery counters, then power down and move the card to a computer. Do not
+   simply disconnect an enabled BME sensor: the watchdog may repeatedly reset
+   the board. Restore the original channel setting afterward. These extra steps
+   are not part of the ten trials; no eject command exists, so write risk remains.
 4. From the project directory, decode **every** `LOG_*.BIN` on the card, for
    example after substituting the card's path:
 

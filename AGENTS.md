@@ -1,20 +1,18 @@
 # PicoLogger: project boundaries and working agreement
 
-- Work only in `/Users/mk-rune/test_projects/11-picologger`. This is one of fourteen independent repositories.
+- Work only in `/Users/mk-rune/test_projects/11-picologger`.
 - Do not read, modify, clean up, or run commands in sibling repositories or the user's configuration.
 - Work autonomously: choose sensible defaults and document assumptions; do not ask questions or delegate.
 - Never install anything globally or use sudo, Homebrew, launchd, host credentials, or host Docker sockets.
 - Dependencies, toolchains, caches, browser binaries, SDKs, temporary files and test data stay in this repository. Preserve the supplied project-local environment. Python packages go in `.venv`.
-- `.agent-local/` is ignored, project-local build/runtime state. `.opencode/` is managed orchestration configuration; do not change or remove it or bypass the sandbox.
+- `.agent-local/` is ignored, project-local build/runtime state. `.opencode/` is protected project configuration; do not change it or bypass the sandbox.
 - Use existing system tools read-only, or install pinned tools under this repository. Do not change shell profiles, user settings, Keychain, or global Git settings.
 - Bind test servers to loopback; use ports 22000–22099. Limit build/test workers to two unless a required benchmark explicitly needs more.
 - Docker-dependent integration tests must remain reproducible but be reported as unverified here if they require access outside this repository. Do not bypass this boundary.
 - Do not touch attached hardware, enroll services, flash firmware, install agents, or alter OS settings. Supply manual checklists for such steps.
-- Implement only the current numbered prompt, preserving prior behavior. Run appropriate checks, fix failures, and report genuine limitations without fabricating test or benchmark results.
-- Before finishing every numbered turn: stop its servers/watchers, remove scratch outputs, update relevant documentation, and make a local conventional-commit Git commit. Do not push.
-- End each turn with a short summary of changes, checks actually run, remaining limitations, and commit hash. The orchestrator will provide the next prompt only after this turn ends.
-
-Extend this file with the project's language-specific architecture and verification commands while retaining these boundaries.
+- Keep work within the current request and preserve prior behavior. Run appropriate checks, fix failures, and report limitations without fabricating results.
+- Before handoff, stop owned servers/watchers, remove scratch outputs, update relevant documentation, and make a local conventional commit. Do not push.
+- Summarize changes, checks actually run, remaining limitations and the commit hash at handoff.
 
 ## Hardware context
 
@@ -28,7 +26,7 @@ Extend this file with the project's language-specific architecture and verificat
 
 ## C11 architecture and checks
 
-- `src/core/` is portable C11 and must never include pico-sdk headers; host tests compile only this portable code. `src/hal/` wraps the hardware; `src/drivers/` holds device drivers and `src/app/` assembles the firmware.
+- `src/core/` is portable C11 and must never include pico-sdk headers. Host tests cover the core and selected application/HAL code using fakes. `src/hal/` wraps hardware; `src/drivers/` holds device drivers and `src/app/` assembles firmware.
 - Run `scripts/setup.sh` to initialize the pinned pico-sdk and its submodules, install Arm GNU Toolchain 13.3.Rel1 and picotool 2.1.1 locally in `.toolchain/`, and create `.venv`. Network access, CMake 3.21+, Git, Python 3, curl, tar, a native compiler and make are required. Unity and the SD/FatFs library are fetched during CMake configuration/build.
 - Project-local CMake can be installed in `.venv`; prepend `.venv/bin` to PATH for the checks. The SDK-bearing firmware target uses GNU C extensions required by the pinned SDK; portable core and host code remain strict C11.
 - Host: `cmake --preset host`, `cmake --build --preset host`, `ctest --preset host`. Host project code is built with `-Wall -Wextra -Werror`; `scripts/check.sh` additionally builds/tests with ASan and UBSan.

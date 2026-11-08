@@ -20,8 +20,9 @@ BME record ring.
 The target index adapter relies on aligned indivisible 32-bit RP2040 SRAM
 accesses, `dmb` and GNU compiler memory clobbers; it does not call C11 atomic
 fallback helpers or mask interrupts. The host adapter uses actual C11 atomics.
-Native stress and ThreadSanitizer tests validate the host equivalent, not the
-physical board or the pinned Arm GCC toolchain. Slow card I/O does not directly
+Native stress and ThreadSanitizer tests validate the host equivalent. The pinned
+Arm GCC build succeeds and its linked acquire/release instructions were inspected;
+the physical board remains unverified. Slow card I/O does not directly
 hold a producer lock, but shared bus contention, CPU work, watchdog policy,
 flash operations and finite buffers still prevent a claim of zero interference.
 

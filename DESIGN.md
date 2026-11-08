@@ -53,10 +53,11 @@ portable C data races are safe. Neither ring endpoint runs in an ISR, and the
 indices have exactly one writer each. Stop-control publication is ordered after
 the last producer head update; core 1 drains before acknowledging stop.
 
-Native pthread/ThreadSanitizer tests exercise the C11 equivalent. Available
-Clang Cortex-M0 object inspection showed `ldr`, `str`, `dmb` and no atomic
-helpers in the target adapter; the pinned Arm GCC build and actual dual-core
-ordering remain unverified here. See `docs/DUAL_CORE.md` for comparison checks.
+Native pthread/ThreadSanitizer tests exercise the C11 equivalent. Both the
+pinned Arm GCC firmware build and Clang Cortex-M0 probe compile the adapter;
+inspection of the GCC-linked acquire/release functions shows `ldr`/`str` and
+`dmb` without atomic helper calls. Actual dual-core ordering remains unverified
+on hardware. See `docs/DUAL_CORE.md` for comparison checks.
 
 Free-running 10 kHz ADC sampling uses one ADC-paced DMA channel and one chained
 control channel to fill alternating halves; completed blocks enter a bounded
@@ -93,7 +94,8 @@ At 1–10 Hz, the Pico uses a guarded 48 MHz system clock and foreground WFI;
 `docs/POWER.md` covers clock domains, USB, batching and unmeasured current.
 `src/core/` contains portable logic, `src/hal/` wraps Pico hardware,
 `src/drivers/` contains device protocols, and `src/app/` assembles the system.
-Host tests compile core code only, independent of the SDK.
+Host tests compile the portable core and selected application/HAL modules with
+fakes, independent of the SDK hardware.
 
 The portable binary header and record layout, CRC and streaming CSV decoder are
 specified in [docs/LOG_FORMAT.md](docs/LOG_FORMAT.md). The current storage path

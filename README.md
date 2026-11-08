@@ -105,6 +105,18 @@ inter-core FIFO is reserved for SDK control/flash lockout. At 1–10 Hz the Pico
 uses guarded 48 MHz/WFI operation; Pico W falls back to normal clocks. See
 [dual-core ordering](docs/DUAL_CORE.md) and [power](docs/POWER.md).
 
+## Implementation and verification status
+
+- **Implemented and locally verified:** both firmware builds, host tests,
+  simulated storage/recovery, settings, fault reporting and USB host tooling.
+- **Partial:** ADC blocks are diagnostics-only; BME humidity reference data is
+  synthetic; recovery and flash protection have documented power-loss limits.
+- **Unverified on hardware:** the HIL suite, USB/ADC/SD behavior, real-time
+  performance, flash interruption, watchdog timing and current draw.
+
+See [verification evidence and limitations](docs/VERIFICATION.md) and the
+prioritized [roadmap](ROADMAP.md) for the remaining work and estimates.
+
 ## Performance — unmeasured
 
 Fill these values from the linked procedures; configured targets are not
