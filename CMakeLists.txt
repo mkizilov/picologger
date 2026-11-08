@@ -1,0 +1,41 @@
+cmake_minimum_required(VERSION 3.21)
+
+option(PICOLOGGER_HOST "Build portable host tests instead of firmware" OFF)
+if(NOT PICOLOGGER_HOST)
+    include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
+endif()
+
+if(PICOLOGGER_HOST)
+    project(picologger C)
+else()
+    project(picologger C CXX ASM)
+endif()
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+add_library(picologger_core src/core/heartbeat.c)
+target_include_directories(picologger_core PUBLIC src/core)
+
+if(PICOLOGGER_HOST)
+    target_compile_options(picologger_core PRIVATE -Wall -Wextra -Werror)
+    include(FetchContent)
+    FetchContent_Declare(unity
+        GIT_REPOSITORY https://github.com/ThrowTheSwitch/Unity.git
+        GIT_TAG v2.6.1
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(unity)
+    enable_testing()
+    add_executable(test_heartbeat test/test_heartbeat.c)
+    target_compile_options(test_heartbeat PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(test_heartbeat PRIVATE picologger_core unity)
+    add_test(NAME heartbeat COMMAND test_heartbeat)
+else()
+    pico_sdk_init()
+    add_executable(picologger src/app/main.c src/hal/board.c)
+    target_include_directories(picologger PRIVATE src/hal)
+    target_link_libraries(picologger PRIVATE picologger_core pico_stdlib)
+    pico_enable_stdio_usb(picologger 1)
+    pico_enable_stdio_uart(picologger 0)
+    pico_add_extra_outputs(picologger)
+endif()

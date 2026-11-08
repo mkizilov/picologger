@@ -1,0 +1,31 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "host",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/host",
+      "cacheVariables": { "PICOLOGGER_HOST": "ON", "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "firmware",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/firmware",
+      "cacheVariables": {
+        "PICOLOGGER_HOST": "OFF",
+        "PICO_BOARD": "pico",
+        "PICO_SDK_PATH": "${sourceDir}/third_party/pico-sdk",
+        "PICO_TOOLCHAIN_PATH": "${sourceDir}/.toolchain/arm-gnu",
+        "PICOTOOL_FORCE_FETCH_FROM_GIT": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "host", "configurePreset": "host", "jobs": 2 },
+    { "name": "firmware", "configurePreset": "firmware", "jobs": 2 }
+  ],
+  "testPresets": [
+    { "name": "host", "configurePreset": "host", "output": { "outputOnFailure": true }, "execution": { "jobs": 2 } }
+  ]
+}
