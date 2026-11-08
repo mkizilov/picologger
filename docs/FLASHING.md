@@ -2,7 +2,8 @@
 
 These are manual instructions; no board or flashing has been tested by the
 agent. Use a data-capable USB cable. The default is the Pico/RP2040; choose the
-Pico W build only for a Pico W. Do not connect sensors or storage for this test.
+Pico W build only for a Pico W. See `BME280.md` for sensor wiring and checks;
+leave storage disconnected.
 
 ## Build
 
@@ -69,7 +70,7 @@ reset. If LED initialization or timer registration fails, an additional
 ## Manual checklist (not performed)
 
 1. Build for the exact Pico or Pico W, then flash its UF2 using one method above.
-   Connect only USB; leave BME280, microSD, GP15 and GP26 disconnected.
+   For sensor wiring and checks, follow the separate `BME280.md` checklist.
 2. Confirm the onboard LED alternates about 500 ms on and 500 ms off without a
    serial terminal connected. This timing has not been measured.
 3. Open a serial terminal and confirm the banner has a git version, 16-digit

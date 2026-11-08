@@ -7,7 +7,9 @@ for prerequisites, exact build commands and hardware pin assignments, and
 2.1.1; Unity 2.6.1 and the SDK's matching picotool are fetched at build time.
 The firmware currently implements a timer-driven LED heartbeat and a USB CDC
 boot banner. See [docs/FLASHING.md](docs/FLASHING.md) for build, flashing, serial
-console and manual verification instructions.
+console and manual verification instructions. The firmware scans I²C0 and
+prints BME280 readings; see [docs/BME280.md](docs/BME280.md) for wiring and
+sensor-specific checks.
 
 The portable binary log format and the Python CSV decoder are described in
 [docs/LOG_FORMAT.md](docs/LOG_FORMAT.md). The firmware does not yet write logs.
@@ -31,6 +33,7 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 
 ## Manual hardware checklist (not performed)
 
-1. Build and flash `build/firmware/picologger.uf2` to the Pico using the guide. Connect USB; no sensor, SD module or ADC input is needed.
+1. Build and flash `build/firmware/picologger.uf2` to the Pico using the guide. Connect USB; follow the separate BME280 checklist if connecting a sensor.
 2. Expect the onboard LED to alternate approximately 500 ms on and off. Open the USB serial console and expect version, board ID and reset reason lines; reconnect the console to see them again.
 3. For Pico W, separately build for `pico_w`, flash that UF2 and repeat the LED and serial checks. No physical board has been tested.
+4. Follow [docs/BME280.md](docs/BME280.md) for sensor wiring, scan, readings and chip-ID troubleshooting.

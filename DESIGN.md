@@ -1,8 +1,8 @@
 # PicoLogger design
 
 The target is a Raspberry Pi Pico (RP2040), with no RTOS. The current firmware
-only blinks its onboard LED and emits a startup banner over USB serial; it does
-not yet sample sensors or write storage. A repeating hardware timer toggles the
+blinks its onboard LED, scans I²C and prints BME280 readings over USB serial; it
+does not yet sample the ADC or write storage. A repeating hardware timer toggles the
 Pico LED every 500 ms. On Pico W the timer changes the desired state and the main
 loop applies it to CYW43, avoiding wireless-driver calls in interrupt context.
 The banner is sent on each USB CDC connection. RP2040 reset information can
@@ -22,8 +22,8 @@ lock-free: initialization fails if the C implementation cannot guarantee that.
 In particular, lock-free behavior with the pinned RP2040 toolchain has not yet
 been verified, so do not use it in an ISR until it has been checked. The ring is
 not yet connected to sampling or storage. Buffer sizing and recovery from card
-errors remain design work. The BME280 is an I2C sensor;
-its slower measurements need scheduling separately from ADC DMA sampling.
+errors remain design work. The BME280 is an I2C sensor; its current once-per-second
+printing is independent of the planned ADC DMA sampling and log storage.
 
 The available Apple Clang Cortex-M0 cross-target lowered 32-bit C11 atomic
 loads/stores to `__atomic_*` helper calls; that is not evidence about the pinned
