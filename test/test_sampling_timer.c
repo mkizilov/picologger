@@ -50,9 +50,12 @@ static void timer_publishes_latest_tick_and_pulses(void)
     unsigned int idle_writes = pin_writes;
     sampling_tick_t tick;
     TEST_ASSERT_FALSE(sampling_timer_take(&tick));
+    TEST_ASSERT_FALSE(sampling_timer_pending());
     now = UINT64_C(0x100001234);
     TEST_ASSERT_TRUE(callback(saved_timer));
+    TEST_ASSERT_TRUE(sampling_timer_pending());
     TEST_ASSERT_TRUE(sampling_timer_take(&tick));
+    TEST_ASSERT_FALSE(sampling_timer_pending());
     TEST_ASSERT_EQUAL_UINT32(1, tick.sequence);
     TEST_ASSERT_EQUAL_UINT64(now, tick.timestamp_us);
     TEST_ASSERT_FALSE(sampling_timer_take(&tick));
@@ -77,6 +80,7 @@ static void timer_publishes_latest_tick_and_pulses(void)
     TEST_ASSERT_FALSE(sampling_timer_start(25));
     cancel_ok = true;
     TEST_ASSERT_TRUE(sampling_timer_stop());
+    TEST_ASSERT_FALSE(sampling_timer_pending());
     TEST_ASSERT_TRUE(sampling_timer_take(&tick));
     TEST_ASSERT_EQUAL_UINT32(4, tick.sequence);
     TEST_ASSERT_TRUE(sampling_timer_start(25));

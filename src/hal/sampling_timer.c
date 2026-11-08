@@ -59,5 +59,7 @@ bool sampling_timer_take(sampling_tick_t *tick)
     return true;
 }
 
+bool sampling_timer_pending(void) { return running && sequence != last_sequence; }
+
 void sampling_pulse_begin(void) { gpio_put(TIMING_PIN, true); }
 void sampling_pulse_end(void) { gpio_put(TIMING_PIN, false); }

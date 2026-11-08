@@ -1,11 +1,13 @@
 #include "unity.h"
 #include "adc_app.h"
 #include "logger.h"
+#include "power_service.h"
 #include "sensor.h"
 #include "settings_service.h"
 #include "usb_console.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static uint8_t input[8192];
@@ -25,12 +27,29 @@ static char dumped_name[33];
 static settings_snapshot_t saved_settings = {{50, 3, 16777216, true}, 0, -1};
 static settings_t active_settings = {50, 3, 16777216, true};
 static bool config_busy, config_done;
+static bool power_busy, power_done, power_ok = true;
+static power_rate_result_t power_request = POWER_RATE_READY;
 
 uint64_t time_us_64(void) { return now; }
 uint64_t adc_app_total_samples(void) { return 123456; }
 uint32_t adc_app_fault(void) { return 0; }
 uint32_t adc_app_flash_pauses(void) { return 1; }
 uint32_t watchdog_monitor_missing(void) { return 0; }
+const char *power_service_mode(void) { return "normal"; }
+uint32_t power_service_sys_hz(void) { return 125000000; }
+bool power_service_busy(void) { return power_busy; }
+bool power_service_can_start(void) { return power_ok; }
+power_rate_result_t power_service_prepare_rate(uint32_t rate)
+{
+    (void)rate;
+    if (power_request == POWER_RATE_PENDING) power_busy = true;
+    return power_request;
+}
+bool power_service_take_result(bool *ok)
+{
+    if (!power_done) return false;
+    power_done = power_busy = false; *ok = power_ok; return true;
+}
 void settings_service_get(settings_snapshot_t *saved, settings_t *active, bool *readable)
 {
     *saved = saved_settings; *active = active_settings; *readable = true;
@@ -51,6 +70,8 @@ bool settings_service_take_result(bool *saved, bool *resumed)
     config_done = config_busy = false; *saved = *resumed = true; return true;
 }
 bool usb_nb_connected(void) { return attached; }
+bool usb_nb_input_ready(void) { return attached && input_read < input_write; }
+bool usb_nb_write_ready(size_t length) { return attached && writable && length <= 64; }
 size_t usb_nb_read(uint8_t *data, size_t capacity)
 {
     TEST_ASSERT_TRUE(capacity <= 16);
@@ -222,11 +243,49 @@ static void hidden_crash_dispatches_without_help_advertisement(void)
     TEST_ASSERT_TRUE(crashed);
 }
 
+static void rate_transition_is_async_and_usb_remains_serviceable(void)
+{
+    storage.state = LOGGER_STOPPED;
+    sensor.running = false;
+    usb_console_init();
+    pump(3);
+    TEST_ASSERT_FALSE(usb_console_has_work());
+    power_request = POWER_RATE_PENDING;
+    feed("rate 10\n");
+    TEST_ASSERT_TRUE(usb_console_has_work());
+    pump(10);
+    TEST_ASSERT_TRUE(power_busy);
+    TEST_ASSERT_EQUAL_UINT32(50, sensor.rate_hz);
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@PENDING rate"));
+    feed("start\nreboot\n"); pump(20);
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@ERR power transition busy"));
+    TEST_ASSERT_FALSE(rebooted);
+    power_done = true; pump(20);
+    TEST_ASSERT_EQUAL_UINT32(10, sensor.rate_hz);
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@OK rate=10"));
+    feed("status\n");
+    pump(1);
+    TEST_ASSERT_TRUE(usb_console_has_work());
+    writable = false;
+    TEST_ASSERT_FALSE(usb_console_has_work());
+    writable = true;
+    TEST_ASSERT_TRUE(usb_console_has_work());
+    pump(100);
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@STATUS power=normal clk_sys=125000000"));
+    power_request = POWER_RATE_PENDING;
+    power_ok = false;
+    feed("rate 25\n"); pump(10);
+    power_done = true; pump(20);
+    TEST_ASSERT_EQUAL_UINT32(10, sensor.rate_hz);
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@ERR power clock; reboot required"));
+}
+
 int main(int argc, char **argv)
 {
     UNITY_BEGIN();
     if (argc == 2 && !strcmp(argv[1], "timeout")) RUN_TEST(reboot_timeout_does_not_wait_forever);
     else if (argc == 2 && !strcmp(argv[1], "crash")) RUN_TEST(hidden_crash_dispatches_without_help_advertisement);
+    else if (argc == 2 && !strcmp(argv[1], "power")) RUN_TEST(rate_transition_is_async_and_usb_remains_serviceable);
     else if (argc == 1) RUN_TEST(commands_are_bounded_and_preserve_sampling_under_backpressure);
     else return 1;
     return UNITY_END();

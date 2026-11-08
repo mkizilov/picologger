@@ -29,7 +29,8 @@ Extend this file with the project's language-specific architecture and verificat
 ## C11 architecture and checks
 
 - `src/core/` is portable C11 and must never include pico-sdk headers; host tests compile only this portable code. `src/hal/` wraps the hardware; `src/drivers/` holds device drivers and `src/app/` assembles the firmware.
-- Run `scripts/setup.sh` to initialize the pinned pico-sdk and its submodules, install Arm GNU Toolchain 13.3.Rel1 locally in `.toolchain/`, and create `.venv`. Network access, CMake 3.21+, Git, Python 3, curl, tar, a native compiler and make are required. Unity, the SD/FatFs library and picotool are fetched during CMake configuration/build.
+- Run `scripts/setup.sh` to initialize the pinned pico-sdk and its submodules, install Arm GNU Toolchain 13.3.Rel1 and picotool 2.1.1 locally in `.toolchain/`, and create `.venv`. Network access, CMake 3.21+, Git, Python 3, curl, tar, a native compiler and make are required. Unity and the SD/FatFs library are fetched during CMake configuration/build.
+- Project-local CMake can be installed in `.venv`; prepend `.venv/bin` to PATH for the checks. The SDK-bearing firmware target uses GNU C extensions required by the pinned SDK; portable core and host code remain strict C11.
 - Host: `cmake --preset host`, `cmake --build --preset host`, `ctest --preset host`. Host project code is built with `-Wall -Wextra -Werror`.
 - Firmware: `cmake --preset firmware`, `cmake --build --preset firmware`. The output is `build/firmware/picologger.uf2`.
 - Compiled default sampling rate is set with `-DPICOLOGGER_SAMPLE_RATE_HZ=<integer>` from 1 to 50 (default 50); persisted settings can override it. `docs/SAMPLING.md` describes the GP15 signal and manual checks.
@@ -40,6 +41,7 @@ Extend this file with the project's language-specific architecture and verificat
 - Persistent settings reserve the final two flash sectors; `docs/SETTINGS.md` documents flash lockout, intentional ADC pauses and manual checks.
 - Watchdog progress gating and retained HardFault reports are described in `docs/WATCHDOG.md`; reset timing and SRAM retention are unmeasured on hardware.
 - Core 0 publishes BME records to a 1024-record SPSC ring; core 1 drains it and owns FatFs. `docs/DUAL_CORE.md` covers ordering and unmeasured jitter comparison.
+- Low-rate sleep, clock changes and unmeasured power checks are documented in `docs/POWER.md`; Pico W falls back to normal clocks.
 - Run `scripts/check.sh` to build both targets and run host tests, with at most two workers.
 - Agents cannot flash or observe the board. Every task touching hardware ends with a numbered manual test checklist stating what to flash, connect, and expect; never claim unobserved results.
 - Definition of done for each future task: `scripts/check.sh` passes, relevant docs are updated, provide a short summary, and create a local conventional-commit Git commit. Report genuine environment limitations instead of claiming checks passed.

@@ -14,7 +14,8 @@ The firmware FetchContent dependency is carlk3's
 [no-OS-FatFS-SD-SDIO-SPI-RPi-Pico](https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico),
 pinned to the v3.6.2 commit `6c644cfc3ab03c161fee2dd7be4877e5b832fa71`.
 It uses SPI1 SCK GP10, MOSI GP11, MISO GP12 and CS GP13, initially requesting
-12.5 MHz after card initialization. Use a 3.3 V-compatible module and FAT32
+12.5 MHz after card initialization; with the 48 MHz peripheral clock the
+achievable SPI frequency can be lower. Use a 3.3 V-compatible module and FAT32
 card. No card-detect pin is assumed.
 
 ## Buffering, rotation and failures
@@ -52,10 +53,11 @@ actual length is at most that limit, rounded down to a complete 32-byte record
 after its 512-byte header. Existing `.BIN` or `.TMP` names are skipped. If all
 9999 names exist, logging goes offline and retries; it does not reuse files.
 
-`f_sync` is attempted about every five seconds, and before rotation. It syncs
+`f_sync` is attempted about every five seconds above 10 Hz, about every 30
+seconds at 1–10 Hz, and before rotation. It syncs
 bytes already submitted to FatFs, **not** the incomplete 4 KiB RAM chunk or
 records still in the shared ring. At low sample rates a partial chunk
-can remain in RAM much longer than five seconds. USB `stop` flushes and closes
+can remain in RAM much longer than either sync interval. USB `stop` flushes and closes
 the current log, but the volume remains mounted and there is no eject command;
 powering down or removing a card can still lose buffered data,
 leave a partial trailing record or an orphan `.TMP`. Use the decoder's
@@ -83,7 +85,7 @@ filesystem cannot be repaired by this scanner. Records still in RAM or not
 synced may be lost; `.TMP` remnants may need manual inspection. See
 `POWER_LOSS.md` for the ten-cycle manual test.
 
-The storage core polls the card after sync, invalidates the mount on errors and
+The storage core polls the card at the same five- or 30-second cadence, invalidates the mount on errors and
 retries roughly every three seconds. Without card-detect hardware, removal and
 reinsertion between checks may not be detected and can corrupt a filesystem;
 avoid rapid hot-swaps. If testing removal, allow the console to show offline

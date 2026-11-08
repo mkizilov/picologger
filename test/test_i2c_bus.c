@@ -10,12 +10,19 @@ static uint8_t written[2], used_address;
 static size_t write_length, read_length;
 static bool write_nostop, read_nostop;
 static unsigned int baud, pin_mask, pullups, write_calls, read_calls;
+static unsigned int reclock_result;
 
 unsigned int i2c_init(i2c_inst_t *i2c, unsigned int rate)
 {
     TEST_ASSERT_EQUAL_PTR(i2c0, i2c);
     baud = rate;
     return rate;
+}
+unsigned int i2c_set_baudrate(i2c_inst_t *i2c, unsigned int rate)
+{
+    TEST_ASSERT_EQUAL_PTR(i2c0, i2c);
+    baud = rate;
+    return reclock_result;
 }
 void gpio_set_function(unsigned int pin, unsigned int function)
 {
@@ -45,6 +52,7 @@ void setUp(void)
 {
     baud = pin_mask = pullups = write_calls = read_calls = 0;
     write_result = 1; read_result = 1;
+    reclock_result = 100000;
 }
 void tearDown(void) {}
 
@@ -54,6 +62,10 @@ static void configures_i2c0_and_pins(void)
     TEST_ASSERT_EQUAL_UINT(100000, baud);
     TEST_ASSERT_EQUAL_UINT((1u << 4) | (1u << 5), pin_mask);
     TEST_ASSERT_EQUAL_UINT(pin_mask, pullups);
+    TEST_ASSERT_TRUE(i2c_bus_reclock());
+    TEST_ASSERT_EQUAL_UINT(100000, baud);
+    reclock_result = 0;
+    TEST_ASSERT_FALSE(i2c_bus_reclock());
 }
 
 static void register_access_and_failures(void)

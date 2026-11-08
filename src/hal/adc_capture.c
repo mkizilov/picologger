@@ -235,6 +235,7 @@ bool adc_capture_resume(void)
 }
 
 bool adc_capture_take(adc_block_t *block) { return adc_blocks_take(&completed, block); }
+bool adc_capture_pending(void) { return completed.head != completed.tail; }
 adc_capture_fault_t adc_capture_fault(void) { return (adc_capture_fault_t)completed.fault; }
 bool adc_capture_fifo_overrun(void) { return started && (adc_hw->fcs & ADC_FCS_OVER_BITS) != 0; }
 bool adc_capture_fifo_underrun(void) { return started && (adc_hw->fcs & ADC_FCS_UNDER_BITS) != 0; }

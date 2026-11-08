@@ -83,7 +83,7 @@ void sensor_report_boot(void)
             printf("BME280 ID read failed at 0x%02x\n", 0x76 + i);
     }
     if (waiting_for_reset || ready) printf("BME280 selected at 0x%02x\n", (unsigned int)sensor.address);
-    else if (!channel_enabled) puts("BME280 channel disabled by settings");
+    else if (!channel_enabled) puts("BME280 channel disabled");
     else printf("BME280 unavailable (status %d)\n", (int)sensor_result);
     printf("Sampling rate=%u Hz, timer period=%u us\n",
            (unsigned int)rate_hz, 1000000u / (unsigned int)rate_hz);

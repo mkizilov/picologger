@@ -8,6 +8,7 @@
 #include "command_io.h"
 #include "log_writer.h"
 #include "logger_channel.h"
+#include "power_policy.h"
 #include "sd_storage.h"
 #include "spsc_ring.h"
 #include "hardware/sync.h"
@@ -223,6 +224,7 @@ static void storage_worker(void)
     unsigned int last_file = 0;
     worker_io_t io = {0};
     bool flash_quiesced = false, stop_pending = false;
+    uint32_t worker_rate = boot_rate;
     for (;;) {
         if (initialized && !flash_quiesced) log_writer_maintain(&writer);
         bool current_online = initialized && writer.online;
@@ -238,6 +240,7 @@ static void storage_worker(void)
                 stop_pending = true;
             } else if ((index & MSG_KIND_MASK) == MSG_START) {
                 bool ok = initialized && !flash_quiesced && log_writer_resume(&writer, index & MSG_VALUE_MASK);
+                if (ok) worker_rate = index & MSG_VALUE_MASK;
                 logger_channel_to_main(MSG_START | (ok ? 1u : 0u));
             } else if (index == MSG_IO_REQUEST) {
                 if (!io.kind && !flash_quiesced) worker_io_begin(&io, &writer);
@@ -313,7 +316,7 @@ static void storage_worker(void)
             uint32_t value = sent_sync > MSG_VALUE_MASK ? MSG_VALUE_MASK : (uint32_t)sent_sync;
             logger_channel_to_main(MSG_SYNC | value);
         }
-        sleep_ms(1);
+        sleep_ms(worker_rate <= PICOLOGGER_LOW_RATE_MAX_HZ && !io.kind && !stop_pending && !flash_quiesced ? 10 : 1);
     }
 }
 

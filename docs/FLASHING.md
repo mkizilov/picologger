@@ -15,7 +15,7 @@ After `scripts/setup.sh`, run `cmake --preset firmware` and
 cmake -S . -B build/firmware-w -DPICO_BOARD=pico_w \
   -DPICO_SDK_PATH="$PWD/third_party/pico-sdk" \
   -DPICO_TOOLCHAIN_PATH="$PWD/.toolchain/arm-gnu" \
-  -DPICOTOOL_FORCE_FETCH_FROM_GIT=ON
+  -Dpicotool_DIR="$PWD/.toolchain/picotool/lib/cmake/picotool"
 cmake --build build/firmware-w --parallel 2
 ```
 
@@ -87,3 +87,4 @@ reset. If LED initialization or timer registration fails, an additional
 11. For persistent settings and flash safety, follow `SETTINGS.md`.
 12. For watchdog and fault-report checks, follow `WATCHDOG.md`.
 13. For dual-core jitter comparison, follow `DUAL_CORE.md`.
+14. For low-rate operation and current measurement, follow `POWER.md`.

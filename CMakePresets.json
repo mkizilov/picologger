@@ -16,7 +16,8 @@
         "PICO_BOARD": "pico",
         "PICO_SDK_PATH": "${sourceDir}/third_party/pico-sdk",
         "PICO_TOOLCHAIN_PATH": "${sourceDir}/.toolchain/arm-gnu",
-        "PICOTOOL_FORCE_FETCH_FROM_GIT": "ON",
+        "PICOTOOL_FORCE_FETCH_FROM_GIT": "OFF",
+        "picotool_DIR": "${sourceDir}/.toolchain/picotool/lib/cmake/picotool",
         "CMAKE_BUILD_TYPE": "Release"
       }
     }

@@ -15,6 +15,12 @@ void i2c_bus_init(void)
     gpio_pull_up(5);
 }
 
+bool i2c_bus_reclock(void)
+{
+    unsigned int actual = i2c_set_baudrate(i2c0, 100000u);
+    return actual >= 90000u && actual <= 100000u;
+}
+
 static int read_register(void *context, uint8_t address, uint8_t reg, uint8_t *data, size_t length)
 {
     (void)context;

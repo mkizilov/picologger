@@ -6,6 +6,7 @@
 #include "sd_storage.h"
 #include "sensor.h"
 #include "settings_service.h"
+#include "power_service.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -23,6 +24,7 @@ static int worker_marker;
 static void (*test_worker_entry)(void);
 static atomic_bool stop_worker, media, hold_mount, hold_dump_read, hold_write;
 static atomic_uint opened_files, closed_files, mount_attempts, entered_dump_read, entered_write, presence_calls;
+static atomic_uint sleeps_one_ms, sleeps_ten_ms;
 static atomic_uint_fast64_t clock_us;
 static unsigned int next_sequence;
 static uint8_t files[3][8192];
@@ -36,6 +38,8 @@ static char dump_text[24000];
 static uint8_t flash_sectors[2][4096];
 static bool test_adc_running, test_flash_armed;
 static unsigned int test_adc_pauses, test_adc_resumes, flash_presence_snapshot;
+static bool test_power_low;
+static unsigned int test_clock_changes;
 
 static bool on_worker(void) { return pthread_getspecific(core_key) != NULL; }
 
@@ -46,10 +50,38 @@ static void wait_briefly(void)
 }
 
 void fake_memory_barrier(void) { atomic_thread_fence(memory_order_seq_cst); }
+uint32_t save_and_disable_interrupts(void) { return 0; }
+void restore_interrupts(uint32_t state) { (void)state; }
+void fake_wfi(void) { abort(); }
+bool sampling_timer_pending(void) { return false; }
+bool adc_capture_pending(void) { return false; }
+bool usb_console_has_work(void) { return false; }
+bool i2c_bus_reclock(void)
+{
+    if (on_worker() || logger_flash_state() != LOGGER_FLASH_READY) abort();
+    return true;
+}
+void power_clock_init(uint32_t rate_hz) { test_power_low = rate_hz <= 10; }
+bool power_clock_supported(void) { return true; }
+bool power_clock_faulted(void) { return false; }
+bool power_clock_low(void) { return test_power_low; }
+uint32_t power_clock_sys_hz(void) { return test_power_low ? 48000000u : 125000000u; }
+bool power_clock_select(bool low)
+{
+    if (on_worker() || logger_flash_state() != LOGGER_FLASH_READY) abort();
+    unsigned int before = atomic_load(&presence_calls);
+    atomic_fetch_add(&clock_us, UINT64_C(10000000));
+    for (unsigned int i = 0; i < 5; ++i) wait_briefly();
+    if (atomic_load(&presence_calls) != before) abort();
+    ++test_clock_changes;
+    test_power_low = low;
+    return true;
+}
 uint64_t time_us_64(void) { return atomic_load(&clock_us); }
 void sleep_ms(uint32_t milliseconds)
 {
-    (void)milliseconds;
+    if (milliseconds == 1) (void)atomic_fetch_add(&sleeps_one_ms, 1);
+    if (milliseconds == 10) (void)atomic_fetch_add(&sleeps_ten_ms, 1);
     if (atomic_load(&stop_worker)) pthread_exit(NULL);
     wait_briefly();
 }
@@ -599,6 +631,59 @@ static void stop_waits_for_all_previously_published_records(void)
     }
 }
 
+static void slow_worker_uses_longer_idle_but_restores_fast_rate(void)
+{
+    atomic_store(&media, true);
+    logger_configure_boot(10, 8192, false);
+    logger_start();
+    TEST_ASSERT_TRUE(pump_until(&sleeps_ten_ms, 1));
+    TEST_ASSERT_TRUE(logger_request_start(11));
+    TEST_ASSERT_TRUE(pump_state(LOGGER_RUNNING));
+    TEST_ASSERT_TRUE(pump_until(&sleeps_one_ms, 1));
+    atomic_store(&stop_worker, true);
+    for (unsigned int i = 0; i < 16; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(worker_thread, NULL));
+    TEST_ASSERT_EQUAL_INT(0, pthread_key_delete(core_key));
+}
+
+static void clock_transition_waits_for_real_storage_quiescence(void)
+{
+    atomic_store(&media, true);
+    logger_configure_boot(50, 8192, false);
+    power_service_init(50);
+    logger_start();
+    TEST_ASSERT_TRUE(pump_until(&mount_attempts, 1));
+    power_rate_result_t request = POWER_RATE_BUSY;
+    for (unsigned int i = 0; i < 2000 && request == POWER_RATE_BUSY; ++i) {
+        logger_poll();
+        request = power_service_prepare_rate(10);
+        if (request == POWER_RATE_BUSY) wait_briefly();
+    }
+    TEST_ASSERT_EQUAL_INT(POWER_RATE_PENDING, request);
+    bool ok = false, completed = false;
+    for (unsigned int i = 0; i < 2000; ++i) {
+        logger_poll();
+        power_service_poll();
+        if (power_service_take_result(&ok)) { completed = true; break; }
+        wait_briefly();
+    }
+    TEST_ASSERT_TRUE(completed);
+    TEST_ASSERT_TRUE(ok);
+    TEST_ASSERT_EQUAL_UINT(1, test_clock_changes);
+    TEST_ASSERT_TRUE(test_power_low);
+    TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
+    TEST_ASSERT_TRUE(logger_request_start(10));
+    TEST_ASSERT_TRUE(pump_state(LOGGER_RUNNING));
+    TEST_ASSERT_TRUE(pump_until(&sleeps_ten_ms, 1));
+    atomic_store(&stop_worker, true);
+    for (unsigned int i = 0; i < 16; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(worker_thread, NULL));
+    TEST_ASSERT_EQUAL_INT(0, pthread_key_delete(core_key));
+    log_header_t header;
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, files[0], file_sizes[0]));
+    TEST_ASSERT_EQUAL_UINT32(10, header.sample_rate_hz);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 2) return 1;
@@ -606,6 +691,8 @@ int main(int argc, char **argv)
     if (argc == 2 && !strcmp(argv[1], "boot_stopped")) RUN_TEST(boot_stopped_opens_no_file_until_start);
     else if (argc == 2 && !strcmp(argv[1], "config_guard")) RUN_TEST(config_save_coordinates_real_logger_guard_and_adc);
     else if (argc == 2 && !strcmp(argv[1], "stop_backlog")) RUN_TEST(stop_waits_for_all_previously_published_records);
+    else if (argc == 2 && !strcmp(argv[1], "low_sleep")) RUN_TEST(slow_worker_uses_longer_idle_but_restores_fast_rate);
+    else if (argc == 2 && !strcmp(argv[1], "clock_guard")) RUN_TEST(clock_transition_waits_for_real_storage_quiescence);
     else {
         if (argc == 2) output_file = argv[1];
         RUN_TEST(records_cross_cores_survive_retry_and_rotate);

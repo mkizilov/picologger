@@ -21,7 +21,12 @@ it feeds only after all currently required progress sources have advanced:
   physical-write window is `ceil(128 / rate_hz) + 2` seconds because a 4 KiB
   chunk contains 128 records; this is 5 s at 50 Hz and 130 s at 1 Hz. A blocked
   `f_write` is still caught by the worker heartbeat. This policy does not claim
-  a physical SD write occurs every two seconds.
+a physical SD write occurs every two seconds.
+
+At 1–10 Hz the foreground may sleep with WFI, but enabled timer, ADC and USB
+interrupts continue to wake it; core 1's low-rate idle poll is 10 ms. The same
+watchdog progress checks remain active. A clock transition or slow card can
+still trigger a reset; actual wake and watchdog timing is unmeasured.
 
 An absent card has no possible writes, so the write checks are explicitly exempt
 while offline; the worker heartbeat and enabled sampling checks remain required.
@@ -41,6 +46,10 @@ cards may need a different policy after measurement; do not silently disable the
 watchdog or claim lossless logging.
 
 ## Retained fault information
+
+The build keeps PicoLogger's fault vector when linking the SD library, which
+also supplies a handler; the library's handler alone is renamed, preserving its
+other assert helpers.
 
 The Cortex-M0+ HardFault handler selects the stacked MSP/PSP frame, checks that
 it lies in SRAM, records PC, LR, xPSR, frame address, EXC_RETURN, core number,

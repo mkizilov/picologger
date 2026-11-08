@@ -148,8 +148,11 @@ static void configuration_and_alternating_blocks(void)
     TEST_ASSERT_EQUAL_UINT(1, configs[1].chain);
     TEST_ASSERT_TRUE(configs[1].quiet);
     adc_block_t block;
+    TEST_ASSERT_FALSE(adc_capture_pending());
     simulate_completion(0, 100);
+    TEST_ASSERT_TRUE(adc_capture_pending());
     TEST_ASSERT_TRUE(adc_capture_take(&block));
+    TEST_ASSERT_FALSE(adc_capture_pending());
     TEST_ASSERT_EQUAL_UINT32(0, block.sequence);
     TEST_ASSERT_EQUAL_UINT64(25600, block.completed_us);
     TEST_ASSERT_EQUAL_UINT16(100, block.samples[0]);

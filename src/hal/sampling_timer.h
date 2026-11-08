@@ -13,6 +13,8 @@ typedef struct {
 bool sampling_timer_start(uint32_t rate_hz);
 bool sampling_timer_stop(void);
 bool sampling_timer_take(sampling_tick_t *tick);
+/* Called on the timer core with interrupts masked immediately before WFI. */
+bool sampling_timer_pending(void);
 void sampling_pulse_begin(void);
 void sampling_pulse_end(void);
 

@@ -8,6 +8,23 @@
 
 bool usb_nb_connected(void) { return stdio_usb_connected(); }
 
+bool usb_nb_input_ready(void)
+{
+    uint32_t state = save_and_disable_interrupts();
+    bool ready = tud_cdc_connected() && tud_cdc_available() != 0;
+    restore_interrupts(state);
+    return ready;
+}
+
+bool usb_nb_write_ready(size_t length)
+{
+    if (length > 64) return false;
+    uint32_t state = save_and_disable_interrupts();
+    bool ready = tud_cdc_connected() && tud_cdc_write_available() >= length;
+    restore_interrupts(state);
+    return ready;
+}
+
 size_t usb_nb_read(uint8_t *data, size_t capacity)
 {
     uint32_t state = save_and_disable_interrupts();

@@ -8,6 +8,8 @@ bool adc_capture_start(void);
 /* Called in foreground; detects a FIFO overrun or stalled DMA. */
 void adc_capture_check(void);
 bool adc_capture_take(adc_block_t *block);
+/* Called on the ADC IRQ core with interrupts masked immediately before WFI. */
+bool adc_capture_pending(void);
 adc_capture_fault_t adc_capture_fault(void);
 bool adc_capture_fifo_overrun(void);
 bool adc_capture_fifo_underrun(void);

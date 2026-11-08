@@ -7,6 +7,8 @@
 
 bool usb_nb_connected(void);
 size_t usb_nb_read(uint8_t *data, size_t capacity);
+bool usb_nb_input_ready(void);
+bool usb_nb_write_ready(size_t length);
 /* Whole frame or nothing, maximum 64 bytes. */
 bool usb_nb_write(const char *data, size_t length);
 void usb_nb_reboot(void);

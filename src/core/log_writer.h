@@ -13,6 +13,7 @@
 #define LOG_RETRY_US UINT64_C(3000000)
 #define LOG_SYNC_US UINT64_C(5000000)
 #define LOG_PRESENCE_US UINT64_C(5000000)
+#define LOG_SYNC_LOW_US UINT64_C(30000000)
 
 /* All callbacks run on the storage core only. create publishes a synced
  * header, reopens the new file immediately after it, and reports header I/O times.
@@ -38,7 +39,7 @@ typedef struct {
     uint32_t record_limit, file_records, synced_records, written_bytes;
     unsigned int next_name, current_number;
     bool online, enabled, file_open;
-    uint64_t next_retry, next_sync, next_presence;
+    uint64_t next_retry, next_sync, next_presence, sync_interval, presence_interval;
     uint64_t dropped, uncertain, worst_write_us, worst_sync_us, recovered_bytes, recovery_errors, accepted_records, write_operations;
 } log_writer_t;
 

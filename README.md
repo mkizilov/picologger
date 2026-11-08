@@ -4,7 +4,8 @@ C11 Raspberry Pi Pico firmware and native portable-code tests. Run
 `scripts/setup.sh` once, then `scripts/check.sh`. See [AGENTS.md](AGENTS.md)
 for prerequisites, exact build commands and hardware pin assignments, and
 [DESIGN.md](DESIGN.md) for the planned architecture. The SDK is pinned to
-2.1.1; Unity 2.6.1 and the SDK's matching picotool are fetched at build time.
+2.1.1; Unity 2.6.1 is fetched at build time and SDK-compatible picotool 2.1.1
+is installed locally by setup.
 The firmware currently implements a timer-driven LED heartbeat and a USB CDC
 boot banner. See [docs/FLASHING.md](docs/FLASHING.md) for build, flashing, serial
 console and manual verification instructions. The firmware scans I²C0 and
@@ -28,23 +29,18 @@ Watchdog and retained HardFault reporting are documented in
 [docs/WATCHDOG.md](docs/WATCHDOG.md).
 Dual-core ownership and the before/after jitter procedure are in
 [docs/DUAL_CORE.md](docs/DUAL_CORE.md).
+Low-rate power behavior and an unmeasured current table are in
+[docs/POWER.md](docs/POWER.md).
 
-## Initial environment verification
+## Local environment
 
-The initial sandbox could not resolve `github.com`, did not provide CMake on
-PATH, and denied nested shell directory traversal and system linker libraries.
-Consequently setup, SDK submodule initialization, Unity tests, picotool and the
-firmware build have not been verified here. The SDK gitlink records release
-2.1.1 but its checkout and nested submodules still need `scripts/setup.sh` in an
-environment where those operations are permitted. The portable heartbeat source
-was compiled to an object with the host compiler and strict warning flags; it
-was not linked or executed in this sandbox.
-
-An empty `third_party/pico-sdk/` directory preserves a clean Git status for the
-uninitialized submodule; it is not an SDK checkout. If the directory is missing,
-Git may report the gitlink as deleted. Recreate the directory or initialize the
-submodule rather than committing that deletion. A subsequent check in the same
-sandbox again found GitHub DNS resolution unavailable and CMake absent.
+The initial sandbox lacked GitHub DNS and CMake. After network access was
+repaired, `scripts/setup.sh` initialized the pinned SDK and project-local Arm
+toolchain; real Unity host tests and the Pico firmware build were run. CMake
+3.31.10 was installed in `.venv` for these checks. For a local installation,
+make it available with `PATH="$PWD/.venv/bin:$PATH"` before `scripts/check.sh`.
+Picotool was built without USB support; UF2 drag-and-drop remains the documented
+manual flashing method. No physical board or power measurements were tested.
 
 ## Manual hardware checklist (not performed)
 
@@ -60,3 +56,4 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 10. Follow [docs/SETTINGS.md](docs/SETTINGS.md) for configuration and flash checks.
 11. Follow [docs/WATCHDOG.md](docs/WATCHDOG.md) for watchdog and HardFault checks.
 12. Follow [docs/DUAL_CORE.md](docs/DUAL_CORE.md) for dual-core and jitter comparison checks.
+13. Follow [docs/POWER.md](docs/POWER.md) for USB power-meter measurements and low-rate checks.

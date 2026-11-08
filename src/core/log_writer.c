@@ -1,4 +1,5 @@
 #include "log_writer.h"
+#include "power_policy.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -61,7 +62,7 @@ static bool sync_file(log_writer_t *writer)
     if (!ok) return false;
     writer->synced_records = writer->written_bytes > LOG_HEADER_V2_SIZE ?
         (writer->written_bytes - LOG_HEADER_V2_SIZE) / LOG_RECORD_SIZE : 0;
-    writer->next_sync = writer->storage.now_us(writer->storage.context) + LOG_SYNC_US;
+    writer->next_sync = writer->storage.now_us(writer->storage.context) + writer->sync_interval;
     return true;
 }
 
@@ -99,8 +100,15 @@ bool log_writer_resume(log_writer_t *writer, uint32_t rate_hz)
     if (log_decode_header(&header, writer->header, sizeof(writer->header)) != LOG_OK) return false;
     header.sample_rate_hz = rate_hz;
     if (log_encode_header_v3(writer->header, sizeof(writer->header), &header) != LOG_OK) return false;
+    writer->sync_interval = rate_hz <= PICOLOGGER_LOW_RATE_MAX_HZ ? LOG_SYNC_LOW_US : LOG_SYNC_US;
+    writer->presence_interval = rate_hz <= PICOLOGGER_LOW_RATE_MAX_HZ ? LOG_SYNC_LOW_US : LOG_PRESENCE_US;
     writer->enabled = true;
     if (writer->online && !create_file(writer)) disconnect(writer);
+    if (writer->online) {
+        uint64_t now = writer->storage.now_us(writer->storage.context);
+        writer->next_sync = now + writer->sync_interval;
+        writer->next_presence = now + writer->presence_interval;
+    }
     return true;
 }
 
@@ -113,6 +121,8 @@ bool log_writer_init(log_writer_t *writer, const log_storage_t *storage,
     memset(writer, 0, sizeof(*writer));
     writer->storage = *storage;
     writer->enabled = true;
+    writer->sync_interval = header->sample_rate_hz <= PICOLOGGER_LOW_RATE_MAX_HZ ? LOG_SYNC_LOW_US : LOG_SYNC_US;
+    writer->presence_interval = header->sample_rate_hz <= PICOLOGGER_LOW_RATE_MAX_HZ ? LOG_SYNC_LOW_US : LOG_PRESENCE_US;
     writer->record_limit = (rotate_bytes - LOG_HEADER_V2_SIZE) / LOG_RECORD_SIZE;
     return log_encode_header_v3(writer->header, sizeof(writer->header), header) == LOG_OK;
 }
@@ -135,8 +145,8 @@ void log_writer_maintain(log_writer_t *writer)
         if (writer->enabled && !create_file(writer)) { disconnect(writer); return; }
         writer->online = true;
         now = writer->storage.now_us(writer->storage.context);
-        writer->next_sync = now + LOG_SYNC_US;
-        writer->next_presence = now + LOG_PRESENCE_US;
+        writer->next_sync = now + writer->sync_interval;
+        writer->next_presence = now + writer->presence_interval;
         return;
     }
     if (now >= writer->next_presence) {
@@ -145,7 +155,7 @@ void log_writer_maintain(log_writer_t *writer)
         if (writer->file_open && !sync_file(writer)) { disconnect(writer); return; }
         if (!writer->storage.present(writer->storage.context)) { disconnect(writer); return; }
         now = writer->storage.now_us(writer->storage.context);
-        writer->next_presence = now + LOG_PRESENCE_US;
+        writer->next_presence = now + writer->presence_interval;
     } else if (writer->file_open && now >= writer->next_sync && !sync_file(writer)) disconnect(writer);
 }
 

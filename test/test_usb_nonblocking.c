@@ -3,13 +3,14 @@
 
 static bool locked, attached = true;
 static uint32_t capacity, writes, reads, flushes, reboots;
+static uint32_t available = 1;
 static uint32_t preserves;
 
-uint32_t save_and_disable_interrupts(void) { TEST_ASSERT_FALSE(locked); locked = true; return 123; }
-void restore_interrupts(uint32_t state) { TEST_ASSERT_TRUE(locked); TEST_ASSERT_EQUAL_UINT(123, state); locked = false; }
+uint32_t save_and_disable_interrupts(void) { uint32_t prior = locked ? 1u : 0u; locked = true; return prior; }
+void restore_interrupts(uint32_t state) { TEST_ASSERT_TRUE(locked); locked = state != 0; }
 bool stdio_usb_connected(void) { return attached; }
 bool tud_cdc_connected(void) { TEST_ASSERT_TRUE(locked); return attached; }
-uint32_t tud_cdc_available(void) { TEST_ASSERT_TRUE(locked); return 1; }
+uint32_t tud_cdc_available(void) { TEST_ASSERT_TRUE(locked); return available; }
 uint32_t tud_cdc_read(void *buffer, uint32_t size)
 {
     TEST_ASSERT_TRUE(locked); TEST_ASSERT_TRUE(size > 0);
@@ -33,19 +34,32 @@ void tearDown(void) {}
 static void bounded_whole_frame_and_nonblocking_input(void)
 {
     TEST_ASSERT_TRUE(usb_nb_connected());
+    TEST_ASSERT_TRUE(usb_nb_input_ready());
+    uint32_t prior = save_and_disable_interrupts();
+    TEST_ASSERT_TRUE(usb_nb_input_ready());
+    TEST_ASSERT_TRUE(locked);
+    restore_interrupts(prior);
+    available = 0;
+    TEST_ASSERT_FALSE(usb_nb_input_ready());
+    available = 1;
     uint8_t byte;
     TEST_ASSERT_EQUAL_UINT(1, usb_nb_read(&byte, 1));
     TEST_ASSERT_EQUAL_UINT('x', byte);
     TEST_ASSERT_EQUAL_UINT(1, reads);
     capacity = 3;
+    TEST_ASSERT_FALSE(usb_nb_write_ready(4));
     TEST_ASSERT_FALSE(usb_nb_write("four", 4));
     TEST_ASSERT_EQUAL_UINT(0, writes);
     capacity = 64;
+    TEST_ASSERT_TRUE(usb_nb_write_ready(4));
+    TEST_ASSERT_FALSE(usb_nb_write_ready(65));
     TEST_ASSERT_TRUE(usb_nb_write("four", 4));
     TEST_ASSERT_EQUAL_UINT(1, writes);
     TEST_ASSERT_EQUAL_UINT(1, flushes);
     TEST_ASSERT_FALSE(usb_nb_write("x", 65));
     attached = false;
+    TEST_ASSERT_FALSE(usb_nb_input_ready());
+    TEST_ASSERT_FALSE(usb_nb_write_ready(1));
     TEST_ASSERT_FALSE(usb_nb_write("x", 1));
     TEST_ASSERT_EQUAL_UINT(0, usb_nb_read(&byte, 1));
     TEST_ASSERT_FALSE(locked);

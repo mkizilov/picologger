@@ -9,6 +9,7 @@
 #include "command.h"
 #include "command_io.h"
 #include "logger.h"
+#include "power_service.h"
 #include "fault_report.h"
 #include "sensor.h"
 #include "settings_service.h"
@@ -20,6 +21,8 @@ static command_parser_t parser;
 static command_dispatch_t dispatch;
 static command_output_t output;
 static bool connected, streaming, stopping, starting, rebooting, reboot_announced, reboot_sent, crashing;
+static bool changing_rate;
+static uint32_t requested_rate;
 static uint64_t stream_dropped, reboot_deadline, crash_deadline;
 static uint8_t input[16];
 static size_t input_pos, input_count;
@@ -65,6 +68,7 @@ static bool handle_status(void *context, const command_request_t *request)
     (void)emit("STATUS adc_fault=%" PRIu32, adc_app_fault());
     (void)emit("STATUS adc_flash_pauses=%" PRIu32, adc_app_flash_pauses());
     (void)emit("STATUS watchdog_missing=0x%02" PRIx32, watchdog_monitor_missing());
+    (void)emit("STATUS power=%s clk_sys=%" PRIu32, power_service_mode(), power_service_sys_hz());
     if (storage.current_file)
         (void)emit("STATUS log=%s sd=%u file=LOG_%04" PRIu32 ".BIN",
                    state_name(storage.state), storage.online ? 1u : 0u, storage.current_file);
@@ -95,7 +99,8 @@ static bool handle_stop(void *context, const command_request_t *request)
     (void)context; (void)request;
     logger_status_t status;
     logger_get_status(&status);
-    if (status.state == LOGGER_STOPPED) {
+    if (changing_rate || power_service_busy()) (void)emit("ERR power transition busy");
+    else if (status.state == LOGGER_STOPPED) {
         if (sensor_set_running(false)) (void)emit("OK stopped");
         else (void)emit("ERR timer stop failed");
     }
@@ -111,7 +116,9 @@ static bool handle_start(void *context, const command_request_t *request)
     sensor_status_t sensor;
     logger_get_status(&storage);
     sensor_get_status(&sensor);
-    if (storage.state == LOGGER_RUNNING) {
+    if (changing_rate || power_service_busy()) (void)emit("ERR power transition busy");
+    else if (!power_service_can_start()) (void)emit("ERR power clock; reboot required");
+    else if (storage.state == LOGGER_RUNNING) {
         if (sensor.running || sensor_set_running(true)) (void)emit("OK running");
         else (void)emit("ERR sensor unavailable");
     } else if (storage.state != LOGGER_STOPPED || !sensor.available || !logger_request_start(sensor.rate_hz))
@@ -125,8 +132,18 @@ static bool handle_rate(void *context, const command_request_t *request)
     (void)context;
     logger_status_t storage;
     logger_get_status(&storage);
-    if (storage.state != LOGGER_STOPPED || !sensor_set_rate(request->rate_hz)) (void)emit("ERR stop first");
-    else (void)emit("OK rate=%" PRIu32, request->rate_hz);
+    if (storage.state != LOGGER_STOPPED || changing_rate || power_service_busy()) {
+        (void)emit("ERR stop first or power busy");
+        return true;
+    }
+    power_rate_result_t result = power_service_prepare_rate(request->rate_hz);
+    if (result == POWER_RATE_READY && sensor_set_rate(request->rate_hz))
+        (void)emit("OK rate=%" PRIu32, request->rate_hz);
+    else if (result == POWER_RATE_PENDING) {
+        changing_rate = true;
+        requested_rate = request->rate_hz;
+        (void)emit("PENDING rate");
+    } else (void)emit(result == POWER_RATE_BUSY ? "ERR power/storage busy" : "ERR power clock; reboot required");
     return true;
 }
 
@@ -159,6 +176,7 @@ static bool handle_reboot(void *context, const command_request_t *request)
 {
     (void)context; (void)request;
     if (settings_service_busy()) (void)emit("ERR config busy");
+    else if (power_service_busy() || changing_rate) (void)emit("ERR power transition busy");
     else if (rebooting) (void)emit("ERR reboot pending");
     else {
         rebooting = true;
@@ -182,7 +200,7 @@ static bool handle_help(void *context, const command_request_t *request)
 static bool handle_crash(void *context, const command_request_t *request)
 {
     (void)context; (void)request;
-    if (settings_service_busy() || crashing) (void)emit("ERR crash unavailable");
+    if (settings_service_busy() || power_service_busy() || changing_rate || crashing) (void)emit("ERR crash unavailable");
     else {
         crashing = true;
         crash_deadline = time_us_64() + UINT64_C(100000);
@@ -273,8 +291,23 @@ void usb_console_sample(const log_record_t *record)
         ++stream_dropped;
 }
 
+bool usb_console_has_work(void)
+{
+    if (!connected) return false;
+    if (input_pos < input_count || usb_nb_input_ready()) return true;
+    char frame[64];
+    size_t length = command_output_frame(&output, frame, sizeof(frame));
+    return length && usb_nb_write_ready(length);
+}
+
 static void progress_controls(void)
 {
+    bool rate_ok;
+    if (changing_rate && power_service_take_result(&rate_ok)) {
+        changing_rate = false;
+        if (rate_ok && sensor_set_rate(requested_rate)) (void)emit("OK rate=%" PRIu32, requested_rate);
+        else (void)emit("ERR power clock; reboot required");
+    }
     logger_status_t status;
     logger_get_status(&status);
     if (crashing && (output.count == 0 || time_us_64() >= crash_deadline)) {

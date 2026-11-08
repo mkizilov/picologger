@@ -10,7 +10,7 @@ typedef struct {
     char names[3][20];
     int current, files;
     bool media, fail_write, short_write, fail_sync, all_exist, fail_recovery, recovery_found;
-    unsigned int mounts, syncs, closes, writes, unmounts, recoveries;
+    unsigned int mounts, syncs, closes, writes, unmounts, recoveries, presence_checks;
     size_t write_lengths[8];
     uint64_t now, write_delay, sync_delay;
 } fake_fs_t;
@@ -63,7 +63,7 @@ static bool fs_write(void *ctx, const uint8_t *data, size_t length, size_t *writ
 static bool fs_sync(void *ctx) { fake_fs_t *f = ctx; ++f->syncs; f->now += f->sync_delay; return f->media && !f->fail_sync; }
 static bool fs_close(void *ctx) { fake_fs_t *f = ctx; ++f->closes; return f->media; }
 static void fs_unmount(void *ctx) { fake_fs_t *f = ctx; ++f->unmounts; }
-static bool fs_present(void *ctx) { return ((fake_fs_t *)ctx)->media; }
+static bool fs_present(void *ctx) { fake_fs_t *f = ctx; ++f->presence_checks; return f->media; }
 static uint64_t fs_now(void *ctx) { return ((fake_fs_t *)ctx)->now; }
 
 void setUp(void)
@@ -290,6 +290,33 @@ static void failed_pause_reports_uncertain_and_can_resume_offline(void)
     TEST_ASSERT_EQUAL_UINT32(20, header.sample_rate_hz);
 }
 
+static void low_rate_batches_and_reduces_sync_and_presence_checks(void)
+{
+    const log_header_t header = {.firmware = "test", .sample_rate_hz = 10,
+        .channel_count = 1, .channel_ids = {1}};
+    const log_storage_t ops = {&fs, fs_mount, fs_recover, fs_create, fs_write, fs_sync, fs_close, fs_unmount, fs_present, fs_now};
+    TEST_ASSERT_TRUE(log_writer_init(&writer, &ops, &header, 8192));
+    log_writer_maintain(&writer);
+    TEST_ASSERT_EQUAL_UINT64(LOG_SYNC_LOW_US, writer.sync_interval);
+    TEST_ASSERT_EQUAL_UINT64(LOG_SYNC_LOW_US, writer.presence_interval);
+    log_writer_append(&writer, records, 4);
+    fs.now = writer.next_sync - 1;
+    log_writer_maintain(&writer);
+    TEST_ASSERT_EQUAL_UINT(0, fs.syncs);
+    TEST_ASSERT_EQUAL_UINT(0, fs.presence_checks);
+    TEST_ASSERT_EQUAL_UINT(0, fs.writes);
+    ++fs.now;
+    log_writer_maintain(&writer);
+    TEST_ASSERT_EQUAL_UINT(1, fs.syncs);
+    TEST_ASSERT_EQUAL_UINT(1, fs.presence_checks);
+    TEST_ASSERT_EQUAL_UINT(0, fs.writes); /* Partial 4 KiB chunk remains in RAM. */
+    TEST_ASSERT_TRUE(log_writer_pause(&writer));
+    TEST_ASSERT_EQUAL_UINT(1, fs.writes);
+    TEST_ASSERT_TRUE(log_writer_resume(&writer, 11));
+    TEST_ASSERT_EQUAL_UINT64(LOG_SYNC_US, writer.sync_interval);
+    TEST_ASSERT_EQUAL_UINT64(LOG_PRESENCE_US, writer.presence_interval);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -305,5 +332,6 @@ int main(void)
     RUN_TEST(successful_recovery_precedes_new_file);
     RUN_TEST(pause_flushes_and_resume_publishes_new_rate);
     RUN_TEST(failed_pause_reports_uncertain_and_can_resume_offline);
+    RUN_TEST(low_rate_batches_and_reduces_sync_and_presence_checks);
     return UNITY_END();
 }

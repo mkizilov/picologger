@@ -12,9 +12,9 @@ consecutive dots are rejected.
 | Command | Behavior |
 | --- | --- |
 | `help` | List commands. |
-| `status` | Uptime, BME280 successful samples/misses/errors, sampling rate, ring high-water mark, ADC delivered-sample count/fault, logging state, SD online state/current file, storage drops/uncertain records and output drops. |
+| `status` | Uptime, sampling and storage counters, rate, power mode and configured system clock, ADC status, SD state and output drops. |
 | `stop` | Stop BME280 timer sampling, drain already queued BME280 records, then flush, sync and close the current log on the storage core. Replies `PENDING stop`, followed by `OK stopped` or `ERR stop flush failed`. ADC DMA continues. |
-| `rate <hz>` | Set BME280 rate to 1–50 Hz while stopped. The value is runtime-only and resets to the saved setting or build default at reboot. |
+| `rate <hz>` | Set BME280 rate to 1–50 Hz while stopped. Crossing the low-power boundary can reply `PENDING rate` before `OK rate=...` or an error. Runtime-only; resets to saved setting or build default at reboot. |
 | `start` | Open a new log with the selected rate in its header and restart BME280 sampling. Replies `PENDING start`, followed by `OK started` or an error. If SD is absent, sampling can start while storage retries and counts drops. |
 | `stream on` / `stream off` | Enable/disable live best-effort BME280 CSV frames. ADC samples are not streamed. |
 | `ls` | List root entries asynchronously as `FILE name size` or `DIR name size`, ending with `END LS`. Unsupported filenames are reported and skipped. |
@@ -22,7 +22,7 @@ consecutive dots are rejected.
 | `reboot` | Request a stop/flush, then schedule a watchdog reboot. After ten seconds it reboots even if storage has not acknowledged; unsynced data may be lost. |
 | `config get` / `config set <key> <value>` / `config reset` | Inspect or save settings for the next boot; real writes require stopped logging and intentionally pause ADC. See `SETTINGS.md`. |
 
-`stop` and `start` are asynchronous; wait for their final `OK`/`ERR` before
+`stop`, `start`, and clock-changing `rate` requests are asynchronous; wait for their final `OK`/`ERR` before
 issuing `rate` or another state transition. `status` reflects the most recently
 received storage-core state, so file and SD status can briefly lag. A failed
 stop can leave unsynced records; check `uncertain` and `recovery_errors` in the
@@ -31,6 +31,7 @@ The ring high-water mark is a conservative producer-side BME280 occupancy snapsh
 sample counts are acquired/delivered counts, not a count of durable records.
 `watchdog_missing` is the current missing-progress bitmask described in
 `WATCHDOG.md`.
+Low-rate clock, USB sleep and measurement limitations are in `POWER.md`.
 
 ## Streaming and dump protocol
 
