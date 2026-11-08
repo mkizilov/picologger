@@ -5,6 +5,8 @@
 #include "command.h"
 
 log_storage_t sd_storage_interface(void);
+/* Called on the storage core after successful recovery reads. */
+void sd_storage_set_progress_hook(void (*hook)(void));
 
 typedef struct {
     char name[COMMAND_FILENAME_MAX + 1];

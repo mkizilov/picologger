@@ -70,6 +70,16 @@ class DecoderTest(unittest.TestCase):
             rows = list(csv.reader(stream))
         self.assertEqual([row[0] for row in rows[1:]], ["4294967294", "4294967295", "0", "1"])
 
+    def test_v2_header_remains_supported(self):
+        data = self.path.read_bytes()
+        header = bytearray(data[:60] + bytes(452))
+        struct.pack_into("<HH", header, 4, 2, 512)
+        struct.pack_into("<H", header, 510, binascii.crc_hqx(header[:510], 0xffff))
+        self.path.write_bytes(header + data[60:])
+        result = self.run_decoder(self.path, self.csv)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("records=4 crc_failures=1 sequence_gaps=1", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

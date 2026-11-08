@@ -10,7 +10,8 @@ static const command_entry_t commands[] = {
     {"stop", COMMAND_STOP, ARG_NONE}, {"rate", COMMAND_RATE, ARG_RATE},
     {"stream", COMMAND_STREAM, ARG_SWITCH}, {"ls", COMMAND_LS, ARG_NONE},
     {"dump", COMMAND_DUMP, ARG_FILE}, {"reboot", COMMAND_REBOOT, ARG_NONE},
-    {"help", COMMAND_HELP, ARG_NONE}, {"config", COMMAND_CONFIG_GET, ARG_CONFIG}
+    {"help", COMMAND_HELP, ARG_NONE}, {"config", COMMAND_CONFIG_GET, ARG_CONFIG},
+    {"crash", COMMAND_CRASH, ARG_NONE}
 };
 
 void command_parser_init(command_parser_t *parser) { memset(parser, 0, sizeof(*parser)); }

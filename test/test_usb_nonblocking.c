@@ -3,6 +3,7 @@
 
 static bool locked, attached = true;
 static uint32_t capacity, writes, reads, flushes, reboots;
+static uint32_t preserves;
 
 uint32_t save_and_disable_interrupts(void) { TEST_ASSERT_FALSE(locked); locked = true; return 123; }
 void restore_interrupts(uint32_t state) { TEST_ASSERT_TRUE(locked); TEST_ASSERT_EQUAL_UINT(123, state); locked = false; }
@@ -22,8 +23,10 @@ uint32_t tud_cdc_write(const void *buffer, uint32_t size)
 uint32_t tud_cdc_write_flush(void) { TEST_ASSERT_TRUE(locked); ++flushes; return 1; }
 void watchdog_reboot(uint32_t pc, uint32_t sp, uint32_t delay_ms)
 {
+    TEST_ASSERT_TRUE(locked);
     TEST_ASSERT_EQUAL_UINT(0, pc); TEST_ASSERT_EQUAL_UINT(0, sp); TEST_ASSERT_EQUAL_UINT(100, delay_ms); ++reboots;
 }
+void fault_preserve_sram_on_watchdog(void) { TEST_ASSERT_TRUE(locked); TEST_ASSERT_EQUAL_UINT(1, reboots); ++preserves; }
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -48,6 +51,7 @@ static void bounded_whole_frame_and_nonblocking_input(void)
     TEST_ASSERT_FALSE(locked);
     usb_nb_reboot();
     TEST_ASSERT_EQUAL_UINT(1, reboots);
+    TEST_ASSERT_EQUAL_UINT(1, preserves);
 }
 
 int main(void)

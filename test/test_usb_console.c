@@ -12,7 +12,7 @@ static uint8_t input[8192];
 static size_t input_read, input_write;
 static char transmitted[65536];
 static size_t transmitted_length;
-static bool attached = true, writable = true, io_busy, cancelled, rebooted;
+static bool attached = true, writable = true, io_busy, cancelled, rebooted, crashed;
 static uint64_t now;
 static logger_status_t storage = {.state = LOGGER_RUNNING, .online = true, .control_ok = true,
                                   .current_file = 12, .dropped = 5, .uncertain = 2};
@@ -30,6 +30,7 @@ uint64_t time_us_64(void) { return now; }
 uint64_t adc_app_total_samples(void) { return 123456; }
 uint32_t adc_app_fault(void) { return 0; }
 uint32_t adc_app_flash_pauses(void) { return 1; }
+uint32_t watchdog_monitor_missing(void) { return 0; }
 void settings_service_get(settings_snapshot_t *saved, settings_t *active, bool *readable)
 {
     *saved = saved_settings; *active = active_settings; *readable = true;
@@ -70,6 +71,7 @@ bool usb_nb_write(const char *data, size_t length)
     return true;
 }
 void usb_nb_reboot(void) { rebooted = true; }
+void fault_force_crash(void) { crashed = true; }
 void sensor_get_status(sensor_status_t *out) { *out = sensor; }
 bool sensor_set_running(bool value) { sensor.running = value; return sensor.available; }
 bool sensor_set_rate(uint32_t rate) { if (sensor.running) return false; sensor.rate_hz = rate; return true; }
@@ -210,10 +212,21 @@ static void reboot_timeout_does_not_wait_forever(void)
     TEST_ASSERT_TRUE(rebooted);
 }
 
+static void hidden_crash_dispatches_without_help_advertisement(void)
+{
+    usb_console_init();
+    pump(2);
+    feed("help\n"); pump(20);
+    TEST_ASSERT_NULL(strstr(transmitted, "crash"));
+    feed("crash\n"); pump(20);
+    TEST_ASSERT_TRUE(crashed);
+}
+
 int main(int argc, char **argv)
 {
     UNITY_BEGIN();
     if (argc == 2 && !strcmp(argv[1], "timeout")) RUN_TEST(reboot_timeout_does_not_wait_forever);
+    else if (argc == 2 && !strcmp(argv[1], "crash")) RUN_TEST(hidden_crash_dispatches_without_help_advertisement);
     else if (argc == 1) RUN_TEST(commands_are_bounded_and_preserve_sampling_under_backpressure);
     else return 1;
     return UNITY_END();

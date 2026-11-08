@@ -95,6 +95,32 @@ static void v2_header_crc_and_reserved_bytes(void)
     TEST_ASSERT_EQUAL_INT(LOG_INVALID_FORMAT, log_decode_header(&output, bytes, sizeof(bytes)));
 }
 
+static void v3_header_round_trips_reset_and_fault_details(void)
+{
+    log_header_t input = {.firmware = "v3-test", .sample_rate_hz = 50, .channel_count = 1,
+                          .channel_ids = {1}, .boot_counter = 7, .reset_reason = BOOT_RESET_HARDFAULT,
+                          .watchdog_reason = 2, .fault_mask = 2, .watchdog_missing = 5};
+    input.fault[1] = (fault_detail_t){FAULT_STACK_VALID, 0x10001234, 0x10005678, 0x21000000,
+                                     0x20041000, 0xfffffff9, 3, 0x8000};
+    input.fault_boot_id[1] = 6;
+    uint8_t bytes[LOG_HEADER_V2_SIZE];
+    log_header_t output;
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_encode_header_v3(bytes, sizeof(bytes), &input));
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&output, bytes, sizeof(bytes)));
+    TEST_ASSERT_EQUAL_UINT32(7, output.boot_counter);
+    TEST_ASSERT_EQUAL_UINT32(BOOT_RESET_HARDFAULT, output.reset_reason);
+    TEST_ASSERT_EQUAL_UINT32(2, output.watchdog_reason);
+    TEST_ASSERT_EQUAL_UINT32(2, output.fault_mask);
+    TEST_ASSERT_EQUAL_UINT32(5, output.watchdog_missing);
+    TEST_ASSERT_EQUAL_UINT32(6, output.fault_boot_id[1]);
+    TEST_ASSERT_EQUAL_UINT32(0x10001234, output.fault[1].pc);
+    TEST_ASSERT_EQUAL_UINT32(0x10005678, output.fault[1].lr);
+    bytes[108] ^= 1;
+    TEST_ASSERT_EQUAL_INT(LOG_CRC_MISMATCH, log_decode_header(&output, bytes, sizeof(bytes)));
+    input.fault[1].flags = 2;
+    TEST_ASSERT_EQUAL_INT(LOG_INVALID_FORMAT, log_encode_header_v3(bytes, sizeof(bytes), &input));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -102,5 +128,6 @@ int main(void)
     RUN_TEST(header_round_trip_and_validation);
     RUN_TEST(record_round_trip_and_corruption);
     RUN_TEST(v2_header_crc_and_reserved_bytes);
+    RUN_TEST(v3_header_round_trips_reset_and_fault_details);
     return UNITY_END();
 }

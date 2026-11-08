@@ -38,6 +38,7 @@ static void reports_effective_rate_and_loss(void)
     }
     input[0].samples[0] = 0x8000;
     adc_app_start();
+    TEST_ASSERT_TRUE(adc_app_watchdog_expected());
     adc_app_report_boot();
     adc_app_poll();
     TEST_ASSERT_EQUAL_UINT(3, next_block);
@@ -51,6 +52,7 @@ static void disabled_adc_channel_does_not_start_capture(void)
 {
     adc_app_configure_boot(false);
     adc_app_start();
+    TEST_ASSERT_FALSE(adc_app_watchdog_expected());
     TEST_ASSERT_EQUAL_UINT(0, capture_starts);
     adc_app_report_boot();
 }

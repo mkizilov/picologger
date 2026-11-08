@@ -161,6 +161,7 @@ static void boot_scan_reset_and_timed_sample(void)
     TEST_ASSERT_EQUAL_UINT64(1, status.read_errors);
     TEST_ASSERT_EQUAL_UINT(256, status.ring_high_water);
     TEST_ASSERT_TRUE(status.running);
+    TEST_ASSERT_TRUE(status.expected);
     TEST_ASSERT_FALSE(sensor_set_rate(25));
     stop_ok = false;
     TEST_ASSERT_FALSE(sensor_set_running(false));
@@ -193,6 +194,7 @@ static void stop_during_initialization_remains_stopped(void)
     sensor_get_status(&status);
     TEST_ASSERT_TRUE(status.available);
     TEST_ASSERT_FALSE(status.running);
+    TEST_ASSERT_FALSE(status.expected);
     TEST_ASSERT_EQUAL_UINT(0, timer_rate);
     TEST_ASSERT_TRUE(sensor_set_rate(25));
     TEST_ASSERT_TRUE(sensor_set_running(true));
@@ -210,6 +212,7 @@ static void disabled_channel_never_starts_sensor(void)
     sensor_get_status(&status);
     TEST_ASSERT_FALSE(status.available);
     TEST_ASSERT_FALSE(status.running);
+    TEST_ASSERT_FALSE(status.expected);
     TEST_ASSERT_EQUAL_UINT(0, timer_rate);
     TEST_ASSERT_EQUAL_UINT(0, writes);
     TEST_ASSERT_FALSE(sensor_set_running(true));

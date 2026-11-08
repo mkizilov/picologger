@@ -1,0 +1,9 @@
+#ifndef PICOLOGGER_FAULT_RESET_H
+#define PICOLOGGER_FAULT_RESET_H
+
+#include "hardware/regs/psm.h"
+
+#define FAULT_SRAM_WDSEL_BITS (PSM_WDSEL_SRAM0_BITS | PSM_WDSEL_SRAM1_BITS | PSM_WDSEL_SRAM2_BITS | \
+                               PSM_WDSEL_SRAM3_BITS | PSM_WDSEL_SRAM4_BITS | PSM_WDSEL_SRAM5_BITS)
+
+#endif

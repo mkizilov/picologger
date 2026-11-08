@@ -19,6 +19,9 @@ with tempfile.TemporaryDirectory(dir=work_dir) as folder:
                              capture_output=True, text=True, check=True)
     if "records=240 crc_failures=0 sequence_gaps=0" not in decoded.stderr:
         raise AssertionError(decoded.stderr)
+    if "reset_reason=3 watchdog_reason=0x00000002 watchdog_missing=0x00000005" not in decoded.stderr or \
+            "hardfault core=1 origin_boot=8 stack_valid=1 pc=0x10001234 lr=0x10005678" not in decoded.stderr:
+        raise AssertionError(f"missing persisted fault metadata: {decoded.stderr}")
     with output.open(newline="", encoding="utf-8") as stream:
         rows = list(csv.reader(stream))
     if len(rows) != 241 or rows[1][0] != "10" or rows[-1][0] != "249":

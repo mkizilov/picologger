@@ -1,4 +1,5 @@
 #include "usb_nonblocking.h"
+#include "fault_report.h"
 
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
@@ -30,4 +31,10 @@ bool usb_nb_write(const char *data, size_t length)
     return ok;
 }
 
-void usb_nb_reboot(void) { watchdog_reboot(0, 0, 100); }
+void usb_nb_reboot(void)
+{
+    uint32_t state = save_and_disable_interrupts();
+    watchdog_reboot(0, 0, 100);
+    fault_preserve_sram_on_watchdog();
+    restore_interrupts(state);
+}

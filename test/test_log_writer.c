@@ -91,6 +91,8 @@ static void aligned_chunks_rotate_without_overwriting(void)
     log_writer_append(&writer, records, 128);
     log_writer_append(&writer, records, 128);
     TEST_ASSERT_EQUAL_UINT(2, fs.files);
+    TEST_ASSERT_EQUAL_UINT64(4, writer.write_operations);
+    TEST_ASSERT_EQUAL_UINT64(256, writer.accepted_records);
     TEST_ASSERT_EQUAL_STRING("0:/LOG_0003.BIN", fs.names[1]);
     TEST_ASSERT_EQUAL_UINT(2, fs.writes);
     TEST_ASSERT_EQUAL_UINT(LOG_WRITE_CHUNK, fs.write_lengths[0]);
@@ -237,6 +239,12 @@ static void successful_recovery_precedes_new_file(void)
 
 static void pause_flushes_and_resume_publishes_new_rate(void)
 {
+    log_header_t boot = {.firmware = "test", .sample_rate_hz = 50, .channel_count = 3,
+                         .channel_ids = {1, 2, 3}, .boot_counter = 7, .reset_reason = BOOT_RESET_HARDFAULT,
+                         .fault_mask = 1};
+    boot.fault[0] = (fault_detail_t){.flags = FAULT_STACK_VALID, .pc = 0x10001234, .lr = 0x10005678};
+    boot.fault_boot_id[0] = 6;
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_encode_header_v3(writer.header, sizeof(writer.header), &boot));
     log_writer_maintain(&writer);
     log_writer_append(&writer, records, 3);
     TEST_ASSERT_TRUE(log_writer_pause(&writer));
@@ -256,6 +264,9 @@ static void pause_flushes_and_resume_publishes_new_rate(void)
     log_header_t header;
     TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, fs.data[1], fs.size[1]));
     TEST_ASSERT_EQUAL_UINT32(25, header.sample_rate_hz);
+    TEST_ASSERT_EQUAL_UINT32(7, header.boot_counter);
+    TEST_ASSERT_EQUAL_UINT32(BOOT_RESET_HARDFAULT, header.reset_reason);
+    TEST_ASSERT_EQUAL_UINT32(0x10001234, header.fault[0].pc);
 }
 
 static void failed_pause_reports_uncertain_and_can_resume_offline(void)

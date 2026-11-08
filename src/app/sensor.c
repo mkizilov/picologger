@@ -154,7 +154,8 @@ bool sensor_set_rate(uint32_t value)
 
 void sensor_get_status(sensor_status_t *status)
 {
-    *status = (sensor_status_t){total_samples, total_missed, total_read_errors, ring_high_water, rate_hz, running, ready};
+    *status = (sensor_status_t){total_samples, total_missed, total_read_errors, ring_high_water, rate_hz,
+                                running, ready, channel_enabled && desired_running};
 }
 
 static void report_statistics(uint64_t now)

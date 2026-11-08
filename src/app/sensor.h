@@ -14,7 +14,7 @@ bool sensor_take_sample(log_record_t *record);
 typedef struct {
     uint64_t samples, missed, read_errors;
     uint32_t ring_high_water, rate_hz;
-    bool running, available;
+    bool running, available, expected;
 } sensor_status_t;
 
 bool sensor_set_running(bool running);

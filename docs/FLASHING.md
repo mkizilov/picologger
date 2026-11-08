@@ -76,8 +76,7 @@ reset. If LED initialization or timer registration fails, an additional
 3. Open a serial terminal and confirm the banner has a git version, 16-digit
    board ID and reset reason. Close and reopen it and confirm the banner repeats.
 4. Power-cycle or use RUN reset and reconnect; confirm a plausible reset reason.
-   For watchdog-specific verification, use a separately reviewed test firmware
-   that intentionally causes a watchdog reset; this firmware does not do so.
+   Follow `WATCHDOG.md` for the hidden deliberate HardFault test and watchdog limits.
 5. If a Pico W is available, repeat with the Pico W-specific build and check its
    onboard CYW43 LED and CDC banner. No wireless network is configured.
 6. For timer sampling and GP15 logic-analyzer checks, follow `SAMPLING.md`.
@@ -86,3 +85,4 @@ reset. If LED initialization or timer registration fails, an additional
 9. For ten power-loss trials and log recovery checks, follow `POWER_LOSS.md`.
 10. For USB commands and checksummed file transfer, follow `USB_COMMANDS.md`.
 11. For persistent settings and flash safety, follow `SETTINGS.md`.
+12. For watchdog and fault-report checks, follow `WATCHDOG.md`.

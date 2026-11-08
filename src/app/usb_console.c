@@ -9,16 +9,18 @@
 #include "command.h"
 #include "command_io.h"
 #include "logger.h"
+#include "fault_report.h"
 #include "sensor.h"
 #include "settings_service.h"
 #include "usb_nonblocking.h"
+#include "watchdog_monitor.h"
 #include "pico/stdlib.h"
 
 static command_parser_t parser;
 static command_dispatch_t dispatch;
 static command_output_t output;
-static bool connected, streaming, stopping, starting, rebooting, reboot_announced, reboot_sent;
-static uint64_t stream_dropped, reboot_deadline;
+static bool connected, streaming, stopping, starting, rebooting, reboot_announced, reboot_sent, crashing;
+static uint64_t stream_dropped, reboot_deadline, crash_deadline;
 static uint8_t input[16];
 static size_t input_pos, input_count;
 
@@ -62,6 +64,7 @@ static bool handle_status(void *context, const command_request_t *request)
     (void)emit("STATUS adc_samples=%" PRIu64, adc_app_total_samples());
     (void)emit("STATUS adc_fault=%" PRIu32, adc_app_fault());
     (void)emit("STATUS adc_flash_pauses=%" PRIu32, adc_app_flash_pauses());
+    (void)emit("STATUS watchdog_missing=0x%02" PRIx32, watchdog_monitor_missing());
     if (storage.current_file)
         (void)emit("STATUS log=%s sd=%u file=LOG_%04" PRIu32 ".BIN",
                    state_name(storage.state), storage.online ? 1u : 0u, storage.current_file);
@@ -176,6 +179,18 @@ static bool handle_help(void *context, const command_request_t *request)
     return true;
 }
 
+static bool handle_crash(void *context, const command_request_t *request)
+{
+    (void)context; (void)request;
+    if (settings_service_busy() || crashing) (void)emit("ERR crash unavailable");
+    else {
+        crashing = true;
+        crash_deadline = time_us_64() + UINT64_C(100000);
+        (void)emit("PENDING crash");
+    }
+    return true;
+}
+
 static bool handle_config_get(void *context, const command_request_t *request)
 {
     (void)context; (void)request;
@@ -246,6 +261,7 @@ void usb_console_init(void)
     dispatch.handler[COMMAND_CONFIG_GET] = handle_config_get;
     dispatch.handler[COMMAND_CONFIG_SET] = handle_config_set;
     dispatch.handler[COMMAND_CONFIG_RESET] = handle_config_reset;
+    dispatch.handler[COMMAND_CRASH] = handle_crash;
 }
 
 void usb_console_sample(const log_record_t *record)
@@ -261,6 +277,10 @@ static void progress_controls(void)
 {
     logger_status_t status;
     logger_get_status(&status);
+    if (crashing && (output.count == 0 || time_us_64() >= crash_deadline)) {
+        crashing = false;
+        fault_force_crash();
+    }
     if (stopping && status.state == LOGGER_STOPPED) {
         stopping = false;
         (void)emit(status.control_ok ? "OK stopped" : "ERR stop flush failed");
@@ -332,8 +352,8 @@ void usb_console_poll(void)
             command_request_t request;
             command_parse_result_t result = command_feed(&parser, input[input_pos++], &request);
             if (result == COMMAND_READY) {
-                if (rebooting && request.kind != COMMAND_STATUS && request.kind != COMMAND_HELP)
-                    (void)emit("ERR reboot pending");
+                if ((rebooting || crashing) && request.kind != COMMAND_STATUS && request.kind != COMMAND_HELP)
+                    (void)emit("ERR reset pending");
                 else (void)command_dispatch(&dispatch, NULL, &request);
             }
             else if (result == COMMAND_UNKNOWN) (void)emit("ERR unknown command");

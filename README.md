@@ -24,6 +24,8 @@ The USB CDC commands, live stream and checksummed dump are documented in
 [docs/USB_COMMANDS.md](docs/USB_COMMANDS.md).
 Persistent settings and flash safety are documented in
 [docs/SETTINGS.md](docs/SETTINGS.md).
+Watchdog and retained HardFault reporting are documented in
+[docs/WATCHDOG.md](docs/WATCHDOG.md).
 
 ## Initial environment verification
 
@@ -54,3 +56,4 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 8. Follow [docs/POWER_LOSS.md](docs/POWER_LOSS.md) for ten manual power-loss trials.
 9. Follow [docs/USB_COMMANDS.md](docs/USB_COMMANDS.md) for command, stream and dump checks.
 10. Follow [docs/SETTINGS.md](docs/SETTINGS.md) for configuration and flash checks.
+11. Follow [docs/WATCHDOG.md](docs/WATCHDOG.md) for watchdog and HardFault checks.

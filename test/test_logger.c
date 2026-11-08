@@ -48,6 +48,7 @@ void multicore_launch_core1_with_stack(void (*entry)(void), uint32_t *stack, siz
     launched = true;
 }
 log_storage_t sd_storage_interface(void) { return (log_storage_t){0}; }
+void sd_storage_set_progress_hook(void (*hook)(void)) { (void)hook; }
 bool sd_storage_list_open(void) { return false; }
 int sd_storage_list_next(sd_list_entry_t *entry) { (void)entry; return -1; }
 bool sd_storage_list_close(void) { return true; }
@@ -174,11 +175,27 @@ static void flash_without_lockout_initialization_is_rejected(void)
     TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
 }
 
+static void partial_batch_is_submitted_after_100ms(void)
+{
+    logger_start();
+    sample_count = 1;
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT(0, out_count);
+    now = 99999;
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT(0, out_count);
+    now = 100000;
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT(1, out_count);
+    TEST_ASSERT_EQUAL_UINT32(0, outgoing[0]);
+}
+
 int main(int argc, char **argv)
 {
     UNITY_BEGIN();
     if (argc == 2 && !strcmp(argv[1], "no_channel")) RUN_TEST(missing_channel_fails_closed_without_hanging);
     else if (argc == 2 && !strcmp(argv[1], "no_flash")) RUN_TEST(flash_without_lockout_initialization_is_rejected);
+    else if (argc == 2 && !strcmp(argv[1], "batch_latency")) RUN_TEST(partial_batch_is_submitted_after_100ms);
     else if (argc == 1) RUN_TEST(batches_are_nonblocking_and_ownership_is_returned);
     else return 1;
     return UNITY_END();

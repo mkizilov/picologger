@@ -174,6 +174,39 @@ static void every_possible_v2_byte_cut_recovers_the_valid_prefix(void)
     TEST_ASSERT_EQUAL_UINT(0, fake.truncates);
 }
 
+static void every_possible_v3_byte_cut_recovers_the_valid_prefix(void)
+{
+    log_header_t header = {.firmware = "recovery-v3", .sample_rate_hz = 50, .channel_count = 1,
+                           .channel_ids = {1}, .boot_counter = 8, .reset_reason = BOOT_RESET_HARDFAULT,
+                           .watchdog_reason = 2, .fault_mask = 1};
+    header.fault[0] = (fault_detail_t){FAULT_STACK_VALID, 0x10001234, 0x10005678, 0x21000000,
+                                      0x20041000, 0xfffffff9, 3, 0x8000};
+    header.fault_boot_id[0] = 7;
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_encode_header_v3(original, sizeof(original), &header));
+    for (unsigned int i = 0; i < RECORDS; ++i) {
+        log_record_t record = {.sequence = i, .timestamp_us = i * UINT64_C(20000)};
+        TEST_ASSERT_EQUAL_INT(LOG_OK, log_encode_record(original + LOG_HEADER_V2_SIZE + i * LOG_RECORD_SIZE,
+                                                        LOG_RECORD_SIZE, &record));
+    }
+    size_t end = LOG_HEADER_V2_SIZE + RECORDS * LOG_RECORD_SIZE;
+    for (size_t cut = 0; cut <= end; ++cut) {
+        memcpy(fake.data, original, sizeof(original));
+        fake.length = cut;
+        fake.truncates = 0;
+        log_recovery_result_t result;
+        log_recovery_status_t status = log_recover(&file, &result);
+        if (cut < LOG_HEADER_V2_SIZE) {
+            TEST_ASSERT_EQUAL_INT(LOG_RECOVERY_INVALID_HEADER, status);
+            TEST_ASSERT_EQUAL_UINT(0, fake.truncates);
+        } else {
+            size_t expected = LOG_HEADER_V2_SIZE + (cut - LOG_HEADER_V2_SIZE) / LOG_RECORD_SIZE * LOG_RECORD_SIZE;
+            TEST_ASSERT_EQUAL_INT(LOG_RECOVERY_OK, status);
+            TEST_ASSERT_EQUAL_UINT(expected, fake.length);
+            TEST_ASSERT_EQUAL_MEMORY(original, fake.data, expected);
+        }
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -182,5 +215,6 @@ int main(void)
     RUN_TEST(invalid_header_and_io_errors_never_trigger_unsafe_truncation);
     RUN_TEST(no_valid_records_leaves_only_the_header);
     RUN_TEST(every_possible_v2_byte_cut_recovers_the_valid_prefix);
+    RUN_TEST(every_possible_v3_byte_cut_recovers_the_valid_prefix);
     return UNITY_END();
 }

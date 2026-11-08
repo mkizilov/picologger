@@ -74,6 +74,9 @@ pause duration are **unmeasured**. This intentional interruption is an exception
 to normal nonblocking commands, and flash erase/program itself can stall the
 CPU/USB for the flash device's duration. BME280 sampling is stopped by the
 required `stop` beforehand.
+The two-second hardware watchdog remains enabled during flash operations. A
+slow erase/program or lockout can therefore reset the board before a save
+finishes; the previous settings slot is intended to survive that interruption.
 
 The terminal reports `PENDING config; ADC will pause`, then either
 `OK config saved; reboot to apply` or an error. `ERR ADC resume failed` requires

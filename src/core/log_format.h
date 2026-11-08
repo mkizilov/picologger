@@ -3,10 +3,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "fault_record.h"
 
 #define LOG_FORMAT_VERSION 1u
 #define LOG_HEADER_SIZE 60u
 #define LOG_FORMAT_VERSION_V2 2u
+#define LOG_FORMAT_VERSION_V3 3u
 #define LOG_HEADER_V2_SIZE 512u
 #define LOG_RECORD_SIZE 32u
 #define LOG_MAX_CHANNELS 4u
@@ -25,6 +27,9 @@ typedef struct {
     uint8_t channel_count;
     uint16_t channel_ids[LOG_MAX_CHANNELS];
     uint32_t boot_counter;
+    uint32_t reset_reason, watchdog_reason, fault_mask, watchdog_missing;
+    fault_detail_t fault[2];
+    uint32_t fault_boot_id[2];
 } log_header_t;
 
 typedef struct {
@@ -39,7 +44,9 @@ uint16_t log_crc16(const uint8_t *data, size_t length);
 log_status_t log_encode_header(uint8_t *output, size_t length, const log_header_t *header);
 /* V2 reserves a whole sector and protects the header with CRC-16. */
 log_status_t log_encode_header_v2(uint8_t *output, size_t length, const log_header_t *header);
-/* Decodes either v1 (60 bytes) or v2 (512 bytes). */
+/* V3 adds reset and two core-specific fault reports in the same 512-byte sector. */
+log_status_t log_encode_header_v3(uint8_t *output, size_t length, const log_header_t *header);
+/* Decodes v1 (60 bytes), v2 or v3 (512 bytes). */
 log_status_t log_decode_header(log_header_t *header, const uint8_t *input, size_t length);
 log_status_t log_encode_record(uint8_t *output, size_t length, const log_record_t *record);
 /* On a CRC or validation failure, the output object is unchanged. */

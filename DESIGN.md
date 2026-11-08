@@ -50,8 +50,8 @@ Host tests compile core code only, independent of the SDK.
 
 The portable binary header and record layout, CRC and streaming CSV decoder are
 specified in [docs/LOG_FORMAT.md](docs/LOG_FORMAT.md). The current storage path
-encodes BME280 records in v2 format, with a separately synced header sector;
-ADC blocks are not yet stored. The boot recovery scanner supports v1 and v2,
+encodes BME280 records in v3 format, with a separately synced header sector and
+boot/fault metadata; ADC blocks are not yet stored. The boot recovery scanner supports v1–v3,
 but cannot guarantee FAT metadata survives arbitrary power loss.
 
 ## Measurements

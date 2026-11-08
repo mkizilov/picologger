@@ -29,6 +29,8 @@ stop can leave unsynced records; check `uncertain` and `recovery_errors` in the
 periodic SD diagnostics. There is no explicit unmount/eject command.
 The ring high-water mark is the maximum BME280 record occupancy since boot;
 sample counts are acquired/delivered counts, not a count of durable records.
+`watchdog_missing` is the current missing-progress bitmask described in
+`WATCHDOG.md`.
 
 ## Streaming and dump protocol
 

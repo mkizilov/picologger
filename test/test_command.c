@@ -34,7 +34,7 @@ static void accepts_every_command_and_dispatches(void)
         {"rate 50\n", COMMAND_RATE}, {"stream on\n", COMMAND_STREAM}, {"ls\n", COMMAND_LS},
         {"dump LOG_0001.BIN\n", COMMAND_DUMP}, {"reboot\n", COMMAND_REBOOT}, {"help\n", COMMAND_HELP},
         {"config get\n", COMMAND_CONFIG_GET}, {"config set rate 25\n", COMMAND_CONFIG_SET},
-        {"config reset\n", COMMAND_CONFIG_RESET}
+        {"config reset\n", COMMAND_CONFIG_RESET}, {"crash\n", COMMAND_CRASH}
     };
     command_dispatch_t dispatch = {0};
     for (unsigned int i = 0; i < COMMAND_COUNT; ++i) dispatch.handler[i] = handle;
@@ -45,7 +45,7 @@ static void accepts_every_command_and_dispatches(void)
         TEST_ASSERT_EQUAL_INT(cases[i].kind, last_kind);
     }
     TEST_ASSERT_EQUAL_UINT(COMMAND_COUNT, calls);
-    dispatch.handler[COMMAND_CONFIG_RESET] = NULL;
+    dispatch.handler[COMMAND_CRASH] = NULL;
     TEST_ASSERT_FALSE(command_dispatch(&dispatch, &calls, &request));
     request.kind = COMMAND_COUNT;
     TEST_ASSERT_FALSE(command_dispatch(&dispatch, &calls, &request));

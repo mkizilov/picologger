@@ -234,6 +234,7 @@ log_storage_t sd_storage_interface(void)
 {
     return (log_storage_t){NULL, fs_mount, fs_recover, fs_create, fs_write, fs_sync, fs_close, fs_unmount, fs_present, fs_now};
 }
+void sd_storage_set_progress_hook(void (*hook)(void)) { (void)hook; }
 bool sd_storage_list_open(void) { list_index = 0; return atomic_load(&media); }
 int sd_storage_list_next(sd_list_entry_t *entry)
 {
@@ -349,6 +350,12 @@ static bool pump_flash_state(logger_flash_state_t desired)
 
 static void records_cross_cores_survive_retry_and_rotate(void)
 {
+    boot_report_t report = {.boot_counter = 9, .reset_reason = BOOT_RESET_HARDFAULT,
+                            .watchdog_reason = 2, .fault_mask = 2, .watchdog_missing = 5};
+    report.fault[1] = (fault_detail_t){FAULT_STACK_VALID, 0x10001234, 0x10005678, 0x21000000,
+                                       0x20041000, 0xfffffff9, 3, 0x8000};
+    report.fault_boot_id[1] = 8;
+    logger_configure_boot_report(&report);
     atomic_store(&hold_mount, true);
     logger_start();
     TEST_ASSERT_TRUE(pump_until(&mount_attempts, 1));
@@ -359,12 +366,23 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     TEST_ASSERT_EQUAL_UINT(0, atomic_load(&returned_batches));
     atomic_store(&hold_mount, false);
     TEST_ASSERT_TRUE(pump_until(&returned_batches, 1));
+    TEST_ASSERT_FALSE(logger_take_fault_logged());
     atomic_store(&media, true);
     atomic_store(&clock_us, UINT64_C(5000000));
     TEST_ASSERT_TRUE(pump_until(&opened_files, 1));
+    for (unsigned int i = 0; i < 20; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_TRUE(logger_take_fault_logged());
+    TEST_ASSERT_FALSE(logger_take_fault_logged());
     pending_samples = 256;
     TEST_ASSERT_TRUE(pump_until(&closed_files, 1));
     while (pending_samples) { logger_poll(); wait_briefly(); }
+    for (unsigned int i = 0; i < 20; ++i) { logger_poll(); wait_briefly(); }
+    logger_status_t observed_progress;
+    logger_get_status(&observed_progress);
+    TEST_ASSERT_TRUE(observed_progress.worker_progress > 0);
+    TEST_ASSERT_TRUE(observed_progress.writer_progress > 0);
+    TEST_ASSERT_TRUE(observed_progress.physical_observed);
+    TEST_ASSERT_TRUE(observed_progress.physical_progress > 0);
     TEST_ASSERT_TRUE(logger_request_list());
     TEST_ASSERT_TRUE(collect_io(false));
     for (unsigned int i = 0; i < 10; ++i) { logger_poll(); wait_briefly(); }
@@ -425,6 +443,11 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     log_header_t header;
     TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, files[0], file_sizes[0]));
     TEST_ASSERT_EQUAL_STRING("test-version", header.firmware);
+    TEST_ASSERT_EQUAL_UINT32(9, header.boot_counter);
+    TEST_ASSERT_EQUAL_UINT32(BOOT_RESET_HARDFAULT, header.reset_reason);
+    TEST_ASSERT_EQUAL_UINT32(5, header.watchdog_missing);
+    TEST_ASSERT_EQUAL_UINT32(8, header.fault_boot_id[1]);
+    TEST_ASSERT_EQUAL_UINT32(0x10001234, header.fault[1].pc);
     TEST_ASSERT_EQUAL_UINT(3, atomic_load(&opened_files));
     TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, files[2], file_sizes[2]));
     TEST_ASSERT_EQUAL_UINT32(25, header.sample_rate_hz);

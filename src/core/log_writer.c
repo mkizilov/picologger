@@ -27,6 +27,7 @@ static bool create_file(log_writer_t *writer)
         if (sync_us > writer->worst_sync_us) writer->worst_sync_us = sync_us;
         if (result == 1) continue;
         if (result != 0) return false;
+        ++writer->write_operations; /* Synced header write. */
         writer->file_open = true;
         writer->current_number = writer->next_name - 1;
         writer->used = 0;
@@ -45,6 +46,7 @@ static bool write_chunk(log_writer_t *writer)
     uint64_t duration = writer->storage.now_us(writer->storage.context) - start;
     if (duration > writer->worst_write_us) writer->worst_write_us = duration;
     if (!ok || written != writer->used) return false;
+    ++writer->write_operations;
     writer->written_bytes += (uint32_t)written;
     writer->used = 0;
     return true;
@@ -96,7 +98,7 @@ bool log_writer_resume(log_writer_t *writer, uint32_t rate_hz)
     log_header_t header;
     if (log_decode_header(&header, writer->header, sizeof(writer->header)) != LOG_OK) return false;
     header.sample_rate_hz = rate_hz;
-    if (log_encode_header_v2(writer->header, sizeof(writer->header), &header) != LOG_OK) return false;
+    if (log_encode_header_v3(writer->header, sizeof(writer->header), &header) != LOG_OK) return false;
     writer->enabled = true;
     if (writer->online && !create_file(writer)) disconnect(writer);
     return true;
@@ -112,7 +114,7 @@ bool log_writer_init(log_writer_t *writer, const log_storage_t *storage,
     writer->storage = *storage;
     writer->enabled = true;
     writer->record_limit = (rotate_bytes - LOG_HEADER_V2_SIZE) / LOG_RECORD_SIZE;
-    return log_encode_header_v2(writer->header, sizeof(writer->header), header) == LOG_OK;
+    return log_encode_header_v3(writer->header, sizeof(writer->header), header) == LOG_OK;
 }
 
 void log_writer_maintain(log_writer_t *writer)
@@ -170,5 +172,6 @@ void log_writer_append(log_writer_t *writer, const uint8_t *records, size_t coun
                 return;
             }
         }
+        ++writer->accepted_records;
     }
 }

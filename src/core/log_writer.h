@@ -39,7 +39,7 @@ typedef struct {
     unsigned int next_name, current_number;
     bool online, enabled, file_open;
     uint64_t next_retry, next_sync, next_presence;
-    uint64_t dropped, uncertain, worst_write_us, worst_sync_us, recovered_bytes, recovery_errors;
+    uint64_t dropped, uncertain, worst_write_us, worst_sync_us, recovered_bytes, recovery_errors, accepted_records, write_operations;
 } log_writer_t;
 
 bool log_writer_init(log_writer_t *writer, const log_storage_t *storage,

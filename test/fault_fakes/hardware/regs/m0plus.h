@@ -1,0 +1,4 @@
+#ifndef TEST_FAULT_M0PLUS_H
+#define TEST_FAULT_M0PLUS_H
+#define M0PLUS_SHCSR_OFFSET 0xed24u
+#endif

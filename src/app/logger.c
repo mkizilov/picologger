@@ -42,7 +42,9 @@ enum { BATCH_COUNT = 4 };
 #define MSG_IO_REPLY UINT32_C(0xd0000000)
 #define MSG_IO_CANCEL UINT32_C(0xe0000000)
 #define MSG_FLASH UINT32_C(0xf0000000)
-enum { FLASH_INIT_OK = 1, FLASH_INIT_FAILED, FLASH_PREPARE, FLASH_READY, FLASH_REJECTED, FLASH_RESUME, FLASH_RELEASED };
+enum { FLASH_INIT_OK = 1, FLASH_INIT_FAILED, FLASH_PREPARE, FLASH_READY, FLASH_REJECTED,
+       FLASH_RESUME, FLASH_RELEASED, FLASH_WORKER_PROGRESS, FLASH_WRITER_PROGRESS, FLASH_FAULT_LOGGED,
+       FLASH_PHYSICAL_PROGRESS };
 
 typedef struct {
     _Alignas(512) uint8_t bytes[LOG_WRITE_CHUNK];
@@ -63,8 +65,13 @@ static logger_flash_state_t flash_state = LOGGER_FLASH_IDLE;
 static logger_state_t state = LOGGER_RUNNING;
 static bool control_sent;
 static uint32_t start_rate, current_file;
+static uint32_t worker_progress, writer_progress, physical_progress;
+static bool physical_observed;
+static uint64_t physical_at_us;
 static uint32_t boot_rate = PICOLOGGER_SAMPLE_RATE_HZ, boot_rotate = PICOLOGGER_LOG_ROTATE_BYTES;
 static bool boot_logging = true;
+static boot_report_t boot_report;
+static bool fault_logged;
 
 typedef struct { uint32_t kind; char name[COMMAND_FILENAME_MAX + 1]; } io_request_t;
 typedef struct { char line[64]; bool final; } io_reply_t;
@@ -72,6 +79,16 @@ static io_request_t io_request;
 static io_reply_t io_reply;
 static bool io_busy, io_request_pending, io_reply_ready, io_ack_pending, io_cancel_pending;
 static bool io_cancelling;
+static uint64_t last_heartbeat;
+
+static void worker_heartbeat(void)
+{
+    uint64_t now = time_us_64();
+    if (now - last_heartbeat >= UINT64_C(250000)) {
+        last_heartbeat = now;
+        logger_channel_to_main(MSG_FLASH | FLASH_WORKER_PROGRESS);
+    }
+}
 
 typedef struct {
     uint32_t kind;
@@ -183,8 +200,15 @@ static void storage_worker(void)
 {
     bool lockout_ready = flash_safe_execute_core_init();
     logger_channel_to_main(MSG_FLASH | (lockout_ready ? FLASH_INIT_OK : FLASH_INIT_FAILED));
+    sd_storage_set_progress_hook(worker_heartbeat);
     log_header_t header = {.sample_rate_hz = boot_rate, .channel_count = 3,
-                           .channel_ids = {1, 2, 3}, .boot_counter = 0};
+                           .channel_ids = {1, 2, 3}, .boot_counter = boot_report.boot_counter,
+                           .reset_reason = boot_report.reset_reason, .watchdog_reason = boot_report.watchdog_reason,
+                           .fault_mask = boot_report.fault_mask, .watchdog_missing = boot_report.watchdog_missing};
+    header.fault[0] = boot_report.fault[0];
+    header.fault[1] = boot_report.fault[1];
+    header.fault_boot_id[0] = boot_report.fault_boot_id[0];
+    header.fault_boot_id[1] = boot_report.fault_boot_id[1];
     const char *version = PICOLOGGER_VERSION;
     unsigned int i = 0;
     while (i < LOG_FIRMWARE_SIZE - 1 && version[i]) {
@@ -198,7 +222,9 @@ static void storage_worker(void)
     if (initialized) writer.enabled = boot_logging;
     uint64_t sent_dropped = 0, sent_uncertain = 0, sent_worst = 0, sent_sync = 0;
     uint64_t sent_recovered = 0, sent_recovery_errors = 0;
+    uint64_t sent_accepted = 0, sent_writes = 0;
     bool last_online = false, status_sent = false;
+    bool fault_log_notified = false;
     unsigned int last_file = 0;
     worker_io_t io = {0};
     bool flash_quiesced = false;
@@ -246,6 +272,10 @@ static void storage_worker(void)
         }
         if (!flash_quiesced) worker_io_step(&io, initialized && writer.online);
         unsigned int file_number = initialized ? writer.current_number : 0;
+        if (file_number && boot_report.fault_mask && !fault_log_notified) {
+            logger_channel_to_main(MSG_FLASH | FLASH_FAULT_LOGGED);
+            fault_log_notified = true;
+        }
         if (file_number != last_file) {
             logger_channel_to_main(MSG_FILE | file_number);
             last_file = file_number;
@@ -254,6 +284,15 @@ static void storage_worker(void)
         send_delta(MSG_UNCERTAIN, &sent_uncertain, writer.uncertain);
         send_delta(MSG_RECOVERED, &sent_recovered, writer.recovered_bytes);
         send_delta(MSG_RECOVERY_ERRORS, &sent_recovery_errors, writer.recovery_errors);
+        if (initialized && writer.accepted_records != sent_accepted) {
+            sent_accepted = writer.accepted_records;
+            logger_channel_to_main(MSG_FLASH | FLASH_WRITER_PROGRESS);
+        }
+        if (initialized && writer.write_operations != sent_writes) {
+            sent_writes = writer.write_operations;
+            logger_channel_to_main(MSG_FLASH | FLASH_PHYSICAL_PROGRESS);
+        }
+        worker_heartbeat();
         if (writer.worst_write_us > sent_worst) {
             sent_worst = writer.worst_write_us;
             uint32_t value = sent_worst > MSG_VALUE_MASK ? MSG_VALUE_MASK : (uint32_t)sent_worst;
@@ -286,6 +325,14 @@ void logger_configure_boot(uint32_t rate_hz, uint32_t rotate_bytes, bool start)
     boot_logging = start;
 }
 
+void logger_configure_boot_report(const boot_report_t *report) { boot_report = *report; }
+bool logger_take_fault_logged(void)
+{
+    bool logged = fault_logged;
+    fault_logged = false;
+    return logged;
+}
+
 void logger_note_drop(uint32_t count) { dropped += count; }
 
 bool logger_request_stop(void)
@@ -308,7 +355,8 @@ bool logger_request_start(uint32_t rate_hz)
 
 void logger_get_status(logger_status_t *status)
 {
-    *status = (logger_status_t){state, online, control_ok, current_file, dropped, uncertain};
+    *status = (logger_status_t){state, online, control_ok, current_file, dropped, uncertain,
+                                worker_progress, writer_progress, physical_progress, physical_observed, physical_at_us};
 }
 
 bool logger_io_busy(void) { return !channel_available || io_busy || io_ack_pending || io_cancel_pending || flash_state != LOGGER_FLASH_IDLE; }
@@ -417,6 +465,12 @@ void logger_poll(void)
                 else if (value == FLASH_READY && flash_state == LOGGER_FLASH_REQUESTING) flash_state = LOGGER_FLASH_READY;
                 else if (value == FLASH_REJECTED && flash_state == LOGGER_FLASH_REQUESTING) flash_state = LOGGER_FLASH_FAILED;
                 else if (value == FLASH_RELEASED && flash_state == LOGGER_FLASH_RELEASING) flash_state = LOGGER_FLASH_IDLE;
+                else if (value == FLASH_WORKER_PROGRESS) ++worker_progress;
+                else if (value == FLASH_WRITER_PROGRESS) ++writer_progress;
+                else if (value == FLASH_FAULT_LOGGED) fault_logged = true;
+                else if (value == FLASH_PHYSICAL_PROGRESS) {
+                    ++physical_progress; physical_observed = true; physical_at_us = time_us_64();
+                }
                 break;
             default: break;
         }
@@ -455,7 +509,7 @@ void logger_poll(void)
             }
             ++batch->count;
         }
-        if (batch->count && (batch->count == LOG_RECORDS_PER_BATCH || now - batch_started >= UINT64_C(1000000) ||
+        if (batch->count && (batch->count == LOG_RECORDS_PER_BATCH || now - batch_started >= UINT64_C(100000) ||
                              (state == LOGGER_STOPPING && drained))) {
             __dmb();
             if (logger_channel_to_worker((uint32_t)active_batch)) active_batch = -1;

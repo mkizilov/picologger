@@ -13,6 +13,9 @@ static FIL dump_file;
 static DIR list_directory;
 static bool listing, dumping;
 static bool driver_initialized;
+static void (*progress_hook)(void);
+
+void sd_storage_set_progress_hook(void (*hook)(void)) { progress_hook = hook; }
 
 static bool mount_card(void *context)
 {
@@ -41,6 +44,7 @@ static bool recovery_read(void *context, uint64_t offset, uint8_t *data, size_t 
     UINT actual = 0;
     FRESULT result = f_read(target, data, (UINT)length, &actual);
     *read = actual;
+    if (result == FR_OK && actual && progress_hook) progress_hook();
     return result == FR_OK;
 }
 

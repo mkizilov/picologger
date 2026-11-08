@@ -1,11 +1,11 @@
 # microSD logging
 
-The firmware logs the **BME280 sample-record stream** in the v2 format
-described by `LOG_FORMAT.md`; v1 decoding and recovery remain supported.
+The firmware logs the **BME280 sample-record stream** in the v3 format
+described by `LOG_FORMAT.md`; v1/v2 decoding and recovery remain supported.
 ADC DMA blocks continue to be sampled and
-reported, but are **not written to SD**: the v1 records do not define a
-mixed-rate ADC block format. Firmware has no persistent boot counter yet, so
-the header's boot counter is `0` (unknown), not a measured boot count. Header
+reported, but are **not written to SD**: the fixed sample records do not define a
+mixed-rate ADC block format. The header's boot counter tracks warm resets but
+does not reliably survive a power cycle. Header
 channel IDs 1, 2 and 3 contain temperature in centi-°C, pressure in whole Pa,
 and relative humidity in %RH × 1024. Sequence numbers are timer trigger
 numbers, so missed triggers and failed sensor reads appear as sequence gaps.
@@ -30,7 +30,7 @@ no real-time guarantee has been measured.
 
 On each mount, the highest-numbered finalized `LOG_####.BIN` is opened and
 recovered before the first unused `LOG_0001.BIN` … `LOG_9999.BIN` is created.
-`FA_CREATE_NEW` prevents overwriting existing files. A new CRC-protected v2
+`FA_CREATE_NEW` prevents overwriting existing files. A new CRC-protected v3
 header occupies its own 512-byte sector: it is written and synced to a `.TMP`
 file, closed, renamed to `.BIN`, and reopened before data writes. Subsequent
 data writes start after that sector. Interrupted `.TMP` files are ignored and
@@ -38,7 +38,7 @@ preserved, not automatically deleted or promoted.
 
 Records are accumulated in a 512-byte-aligned buffer and normally submitted in
 4096-byte chunks from sector-aligned offsets. The initial 512-byte header write
-and final shorter rotation or USB-stop write are deliberate exceptions. Both v2 header
+and final shorter rotation or USB-stop write are deliberate exceptions. Both v3 header
 and normal chunks end on record boundaries. The compiled default rotation limit
 is 16 MiB; saved settings can override it. To change the build default:
 

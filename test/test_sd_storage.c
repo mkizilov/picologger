@@ -20,6 +20,7 @@ static bool driver_ok, present, fail_sync, fail_close, fail_rename, rename_exist
 static bool fail_read, fail_readdir, fail_truncate;
 static int partial_header;
 static uint64_t fake_time;
+static unsigned int recovery_progress;
 static sd_card_t card;
 
 static bool same_name(const char *a, const char *b)
@@ -144,9 +145,12 @@ static void clear_fake(void)
 void setUp(void)
 {
     clear_fake();
+    recovery_progress = 0;
+    sd_storage_set_progress_hook(NULL);
     driver_ok = present = true;
     card.sd_test_com = test_card;
 }
+static void note_recovery_progress(void) { ++recovery_progress; }
 void tearDown(void) {}
 
 static void add_log(const char *name, bool v2, unsigned int records, unsigned int tail)
@@ -309,6 +313,7 @@ static void invalid_newest_or_io_error_preserves_data(void)
 static void newest_v1_log_is_recovered(void)
 {
     log_storage_t ops = sd_storage_interface();
+    sd_storage_set_progress_hook(note_recovery_progress);
     add_log("0:/LOG_0004.BIN", true, 1, 0);
     add_log("0:/LOG_0005.BIN", false, 2, 9);
     bool found = false;
@@ -318,6 +323,7 @@ static void newest_v1_log_is_recovered(void)
     TEST_ASSERT_EQUAL_UINT64(LOG_HEADER_SIZE + 2 * LOG_RECORD_SIZE + 9, result.original_size);
     TEST_ASSERT_EQUAL_UINT64(LOG_HEADER_SIZE + 2 * LOG_RECORD_SIZE, result.recovered_size);
     TEST_ASSERT_EQUAL_UINT(1, truncates);
+    TEST_ASSERT_TRUE(recovery_progress >= 2);
 }
 
 static void list_and_dump_are_bounded_and_validate_names(void)

@@ -86,6 +86,32 @@ log_status_t log_encode_header_v2(uint8_t *output, size_t length, const log_head
     return LOG_OK;
 }
 
+log_status_t log_encode_header_v3(uint8_t *output, size_t length, const log_header_t *header)
+{
+    if (!header || header->reset_reason > BOOT_RESET_HARDFAULT || (header->fault_mask & ~3u)) return LOG_INVALID_FORMAT;
+    for (unsigned int core = 0; core < 2; ++core)
+        if ((header->fault_mask & (1u << core)) && (header->fault[core].flags & ~FAULT_STACK_VALID))
+            return LOG_INVALID_FORMAT;
+    log_status_t result = log_encode_header_v2(output, length, header);
+    if (result != LOG_OK) return result;
+    put_le(output + 4, LOG_FORMAT_VERSION_V3, 2);
+    put_le(output + 60, header->reset_reason, 4);
+    put_le(output + 64, header->watchdog_reason, 4);
+    put_le(output + 68, header->fault_mask, 4);
+    put_le(output + 144, header->watchdog_missing, 4);
+    for (unsigned int core = 0; core < 2; ++core) {
+        if (!(header->fault_mask & (1u << core))) continue;
+        const fault_detail_t *f = &header->fault[core];
+        uint8_t *p = output + 72 + core * 32;
+        put_le(p, f->flags, 4); put_le(p + 4, f->pc, 4); put_le(p + 8, f->lr, 4);
+        put_le(p + 12, f->xpsr, 4); put_le(p + 16, f->sp, 4); put_le(p + 20, f->exception_lr, 4);
+        put_le(p + 24, f->icsr, 4); put_le(p + 28, f->shcsr, 4);
+        put_le(output + 136 + core * 4, header->fault_boot_id[core], 4);
+    }
+    put_le(output + LOG_HEADER_V2_SIZE - 2, log_crc16(output, LOG_HEADER_V2_SIZE - 2), 2);
+    return LOG_OK;
+}
+
 log_status_t log_decode_header(log_header_t *header, const uint8_t *input, size_t length)
 {
     if (header == NULL || input == NULL) return LOG_INVALID_FORMAT;
@@ -94,15 +120,16 @@ log_status_t log_decode_header(log_header_t *header, const uint8_t *input, size_
     uint64_t header_size = get_le(input + 6, 2);
     if (memcmp(input, "PLOG", 4) ||
         !((version == LOG_FORMAT_VERSION && header_size == LOG_HEADER_SIZE) ||
-          (version == LOG_FORMAT_VERSION_V2 && header_size == LOG_HEADER_V2_SIZE)) ||
+          ((version == LOG_FORMAT_VERSION_V2 || version == LOG_FORMAT_VERSION_V3) && header_size == LOG_HEADER_V2_SIZE)) ||
         input[45] || input[46] || input[47]) {
         return LOG_INVALID_FORMAT;
     }
     if (length < header_size) return LOG_SHORT_BUFFER;
-    if (version == LOG_FORMAT_VERSION_V2) {
+    if (version == LOG_FORMAT_VERSION_V2 || version == LOG_FORMAT_VERSION_V3) {
         if (get_le(input + LOG_HEADER_V2_SIZE - 2, 2) != log_crc16(input, LOG_HEADER_V2_SIZE - 2))
             return LOG_CRC_MISMATCH;
-        for (size_t i = LOG_HEADER_SIZE; i < LOG_HEADER_V2_SIZE - 2; ++i)
+        size_t reserved_start = version == LOG_FORMAT_VERSION_V2 ? LOG_HEADER_SIZE : 148;
+        for (size_t i = reserved_start; i < LOG_HEADER_V2_SIZE - 2; ++i)
             if (input[i] != 0) return LOG_INVALID_FORMAT;
     }
     log_header_t decoded = {0};
@@ -113,6 +140,28 @@ log_status_t log_decode_header(log_header_t *header, const uint8_t *input, size_
         decoded.channel_ids[i] = (uint16_t)get_le(input + 48 + i * 2, 2);
     }
     decoded.boot_counter = (uint32_t)get_le(input + 56, 4);
+    if (version == LOG_FORMAT_VERSION_V3) {
+        decoded.reset_reason = (uint32_t)get_le(input + 60, 4);
+        decoded.watchdog_reason = (uint32_t)get_le(input + 64, 4);
+        decoded.fault_mask = (uint32_t)get_le(input + 68, 4);
+        decoded.watchdog_missing = (uint32_t)get_le(input + 144, 4);
+        if (decoded.reset_reason > BOOT_RESET_HARDFAULT || (decoded.fault_mask & ~3u)) return LOG_INVALID_FORMAT;
+        for (unsigned int core = 0; core < 2; ++core) {
+            const uint8_t *p = input + 72 + core * 32;
+            if (!(decoded.fault_mask & (1u << core))) {
+                for (unsigned int i = 0; i < 32; ++i) if (p[i]) return LOG_INVALID_FORMAT;
+                if (get_le(input + 136 + core * 4, 4)) return LOG_INVALID_FORMAT;
+                continue;
+            }
+            fault_detail_t *f = &decoded.fault[core];
+            f->flags = (uint32_t)get_le(p, 4); f->pc = (uint32_t)get_le(p + 4, 4);
+            f->lr = (uint32_t)get_le(p + 8, 4); f->xpsr = (uint32_t)get_le(p + 12, 4);
+            f->sp = (uint32_t)get_le(p + 16, 4); f->exception_lr = (uint32_t)get_le(p + 20, 4);
+            f->icsr = (uint32_t)get_le(p + 24, 4); f->shcsr = (uint32_t)get_le(p + 28, 4);
+            decoded.fault_boot_id[core] = (uint32_t)get_le(input + 136 + core * 4, 4);
+            if (f->flags & ~FAULT_STACK_VALID) return LOG_INVALID_FORMAT;
+        }
+    }
     if (!valid_header(&decoded)) return LOG_INVALID_FORMAT;
     size_t end = strlen(decoded.firmware);
     for (size_t i = end + 1; i < LOG_FIRMWARE_SIZE; ++i) {

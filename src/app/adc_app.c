@@ -55,6 +55,7 @@ static void process_block(const adc_block_t *record)
 uint64_t adc_app_total_samples(void) { return total_samples; }
 uint32_t adc_app_fault(void) { return (uint32_t)adc_capture_fault(); }
 uint32_t adc_app_flash_pauses(void) { return flash_pauses; }
+bool adc_app_watchdog_expected(void) { return boot_enabled; }
 
 bool adc_app_pause_for_flash(bool *was_running)
 {

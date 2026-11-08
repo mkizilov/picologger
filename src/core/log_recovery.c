@@ -18,7 +18,7 @@ log_recovery_status_t log_recover(const log_recovery_file_t *file, log_recovery_
     uint16_t version = (uint16_t)(buffer[4] | (uint16_t)buffer[5] << 8);
     uint16_t header_size = (uint16_t)(buffer[6] | (uint16_t)buffer[7] << 8);
     if (!((version == LOG_FORMAT_VERSION && header_size == LOG_HEADER_SIZE) ||
-          (version == LOG_FORMAT_VERSION_V2 && header_size == LOG_HEADER_V2_SIZE)))
+          ((version == LOG_FORMAT_VERSION_V2 || version == LOG_FORMAT_VERSION_V3) && header_size == LOG_HEADER_V2_SIZE)))
         return LOG_RECOVERY_INVALID_HEADER;
     if (size < header_size) return LOG_RECOVERY_INVALID_HEADER;
     if (header_size > LOG_HEADER_SIZE &&
