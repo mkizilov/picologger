@@ -40,8 +40,9 @@ generated code for helper calls or interrupt masking. If it cannot meet that
 requirement, a separate target-specific design is needed rather than bypassing
 the initialization check.
 
-The USB serial command interface will configure and inspect logging without an
-RTOS. `src/core/` contains portable logic, `src/hal/` wraps Pico hardware,
+The USB serial command interface configures and inspects logging without an
+RTOS; see `docs/USB_COMMANDS.md` for bounded work and transport limits.
+`src/core/` contains portable logic, `src/hal/` wraps Pico hardware,
 `src/drivers/` contains device protocols, and `src/app/` assembles the system.
 Host tests compile core code only, independent of the SDK.
 

@@ -8,6 +8,7 @@
 static uint8_t registers[256];
 static uint64_t clock_us;
 static bool connected, fail_data;
+static bool start_ok = true, stop_ok = true;
 static unsigned int probes, data_reads, writes, pulse_starts, pulse_ends, dropped_records;
 static uint32_t timer_rate, sequence;
 static bool tick_pending, pin_high;
@@ -15,6 +16,7 @@ static sampling_tick_t pending_tick;
 
 void i2c_bus_init(void) {}
 void logger_note_drop(uint32_t count) { dropped_records += count; }
+void usb_console_sample(const log_record_t *record) { (void)record; }
 static unsigned int drain_samples(void)
 {
     log_record_t record;
@@ -29,7 +31,8 @@ int i2c_bus_probe(uint8_t address)
 }
 uint64_t time_us_64(void) { return clock_us; }
 bool stdio_usb_connected(void) { return connected; }
-bool sampling_timer_start(uint32_t rate_hz) { timer_rate = rate_hz; return true; }
+bool sampling_timer_start(uint32_t rate_hz) { timer_rate = rate_hz; return start_ok; }
+bool sampling_timer_stop(void) { return stop_ok; }
 bool sampling_timer_take(sampling_tick_t *tick)
 {
     if (!tick_pending) return false;
@@ -151,11 +154,55 @@ static void boot_scan_reset_and_timed_sample(void)
     }
     TEST_ASSERT_EQUAL_UINT(44, dropped_records);
     TEST_ASSERT_EQUAL_UINT(256, drain_samples());
+    sensor_status_t status;
+    sensor_get_status(&status);
+    TEST_ASSERT_EQUAL_UINT64(799, status.samples);
+    TEST_ASSERT_EQUAL_UINT64(1, status.missed);
+    TEST_ASSERT_EQUAL_UINT64(1, status.read_errors);
+    TEST_ASSERT_EQUAL_UINT(256, status.ring_high_water);
+    TEST_ASSERT_TRUE(status.running);
+    TEST_ASSERT_FALSE(sensor_set_rate(25));
+    stop_ok = false;
+    TEST_ASSERT_FALSE(sensor_set_running(false));
+    stop_ok = true;
+    TEST_ASSERT_TRUE(sensor_set_running(false));
+    TEST_ASSERT_TRUE(sensor_set_rate(25));
+    TEST_ASSERT_FALSE(sensor_set_rate(51));
+    start_ok = false;
+    TEST_ASSERT_FALSE(sensor_set_running(true));
+    start_ok = true;
+    TEST_ASSERT_TRUE(sensor_set_running(true));
+    TEST_ASSERT_EQUAL_UINT(25, timer_rate);
+    sensor_get_status(&status);
+    TEST_ASSERT_EQUAL_UINT(25, status.rate_hz);
+    TEST_ASSERT_TRUE(status.running);
 }
 
-int main(void)
+static void stop_during_initialization_remains_stopped(void)
+{
+    registers[0xd0] = 0x60;
+    const int32_t calibration[] = {27504, 26435, -1000, 36477, -10685, 3024,
+                                   2855, 140, -7, 15500, -14600, 6000};
+    for (unsigned int i = 0; i < 12; ++i) set16((uint8_t)(0x88 + 2 * i), calibration[i]);
+    sensor_start();
+    TEST_ASSERT_TRUE(sensor_set_running(false));
+    clock_us = 2000;
+    sensor_poll();
+    sensor_status_t status;
+    sensor_get_status(&status);
+    TEST_ASSERT_TRUE(status.available);
+    TEST_ASSERT_FALSE(status.running);
+    TEST_ASSERT_EQUAL_UINT(0, timer_rate);
+    TEST_ASSERT_TRUE(sensor_set_rate(25));
+    TEST_ASSERT_TRUE(sensor_set_running(true));
+    TEST_ASSERT_EQUAL_UINT(25, timer_rate);
+}
+
+int main(int argc, char **argv)
 {
     UNITY_BEGIN();
-    RUN_TEST(boot_scan_reset_and_timed_sample);
+    if (argc == 2 && !strcmp(argv[1], "early_stop")) RUN_TEST(stop_during_initialization_remains_stopped);
+    else if (argc == 1) RUN_TEST(boot_scan_reset_and_timed_sample);
+    else return 1;
     return UNITY_END();
 }

@@ -32,6 +32,12 @@ void multicore_launch_core1_with_stack(void (*entry)(void), uint32_t *stack, siz
     launched = true;
 }
 log_storage_t sd_storage_interface(void) { return (log_storage_t){0}; }
+bool sd_storage_list_open(void) { return false; }
+int sd_storage_list_next(sd_list_entry_t *entry) { (void)entry; return -1; }
+bool sd_storage_list_close(void) { return true; }
+bool sd_storage_dump_open(const char *name) { (void)name; return false; }
+bool sd_storage_dump_read(uint8_t *data, size_t size, size_t *read) { (void)data; (void)size; (void)read; return false; }
+bool sd_storage_dump_close(void) { return true; }
 bool sensor_take_sample(log_record_t *record)
 {
     if (sample_pos == sample_count) return false;
@@ -78,6 +84,25 @@ static void batches_are_nonblocking_and_ownership_is_returned(void)
     logger_poll();
     TEST_ASSERT_EQUAL_UINT(5, out_count);
     TEST_ASSERT_EQUAL_UINT(0, outgoing[4]);
+    TEST_ASSERT_TRUE(logger_request_stop());
+    TEST_ASSERT_FALSE(logger_request_start(25));
+    incoming[in_write++] = 1;
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT(6, out_count);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0x80000000), outgoing[5]);
+    incoming[in_write++] = UINT32_C(0x80000001);
+    logger_poll();
+    logger_status_t status;
+    logger_get_status(&status);
+    TEST_ASSERT_EQUAL_INT(LOGGER_STOPPED, status.state);
+    TEST_ASSERT_TRUE(status.control_ok);
+    TEST_ASSERT_TRUE(logger_request_start(25));
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0x90000019), outgoing[6]);
+    incoming[in_write++] = UINT32_C(0x90000001);
+    logger_poll();
+    logger_get_status(&status);
+    TEST_ASSERT_EQUAL_INT(LOGGER_RUNNING, status.state);
 }
 
 int main(void)

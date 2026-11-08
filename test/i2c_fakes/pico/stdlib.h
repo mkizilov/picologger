@@ -9,6 +9,7 @@ struct repeating_timer { int unused; };
 typedef bool (*repeating_timer_callback_t)(struct repeating_timer *);
 bool add_repeating_timer_us(int64_t delay, repeating_timer_callback_t callback,
                             void *user_data, struct repeating_timer *timer);
+bool cancel_repeating_timer(struct repeating_timer *timer);
 void gpio_init(unsigned int pin);
 void gpio_set_dir(unsigned int pin, bool output);
 void gpio_put(unsigned int pin, bool value);

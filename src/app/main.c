@@ -5,6 +5,7 @@
 #include "firmware_version.h"
 #include "logger.h"
 #include "sensor.h"
+#include "usb_console.h"
 #include "pico/stdlib.h"
 #include "pico/stdio_usb.h"
 #include "pico/unique_id.h"
@@ -12,6 +13,7 @@
 int main(void)
 {
     stdio_init_all();
+    usb_console_init();
     const bool heartbeat_ok = board_init();
     sensor_start();
     adc_app_start();
@@ -40,6 +42,7 @@ int main(void)
         sensor_poll();
         adc_app_poll();
         logger_poll();
+        usb_console_poll();
         tight_loop_contents();
     }
 }

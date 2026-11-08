@@ -81,7 +81,8 @@ FRESULT f_read(FIL *target, void *data, UINT size, UINT *read)
 {
     if (fail_read) return FR_DISK_ERR;
     entry_t *e = &entries[target->index];
-    if (target->position > e->length || size > e->length - target->position) return FR_DISK_ERR;
+    if (target->position > e->length) return FR_DISK_ERR;
+    if (size > e->length - target->position) size = (UINT)(e->length - target->position);
     memcpy(data, e->data + target->position, size);
     target->position += size;
     *read = size;
@@ -117,6 +118,7 @@ FRESULT f_readdir(DIR *dir, FILINFO *info)
     entry_t *e = &entries[dir->position++];
     (void)snprintf(info->fname, sizeof(info->fname), "%s", e->name + 3);
     info->fattrib = e->directory ? AM_DIR : 0;
+    info->fsize = e->length;
     return FR_OK;
 }
 FRESULT f_closedir(DIR *dir) { (void)dir; ++closed_dirs; return FR_OK; }
@@ -318,6 +320,51 @@ static void newest_v1_log_is_recovered(void)
     TEST_ASSERT_EQUAL_UINT(1, truncates);
 }
 
+static void list_and_dump_are_bounded_and_validate_names(void)
+{
+    add_log("0:/LOG_0001.BIN", true, 1, 0);
+    add_log("0:/bad name.BIN", true, 0, 0);
+    add_log("0:/DIRNAME", true, 0, 0);
+    entries[2].directory = true;
+    sd_list_entry_t entry;
+    TEST_ASSERT_TRUE(sd_storage_list_open());
+    TEST_ASSERT_FALSE(sd_storage_list_open());
+    TEST_ASSERT_EQUAL_INT(1, sd_storage_list_next(&entry));
+    TEST_ASSERT_EQUAL_STRING("LOG_0001.BIN", entry.name);
+    TEST_ASSERT_EQUAL_UINT64(LOG_HEADER_V2_SIZE + LOG_RECORD_SIZE, entry.size);
+    TEST_ASSERT_FALSE(entry.directory);
+    TEST_ASSERT_EQUAL_INT(2, sd_storage_list_next(&entry));
+    TEST_ASSERT_EQUAL_INT(1, sd_storage_list_next(&entry));
+    TEST_ASSERT_TRUE(entry.directory);
+    TEST_ASSERT_EQUAL_INT(0, sd_storage_list_next(&entry));
+    TEST_ASSERT_TRUE(sd_storage_list_close());
+    TEST_ASSERT_EQUAL_INT(-1, sd_storage_list_next(&entry));
+    TEST_ASSERT_TRUE(sd_storage_list_open());
+    fail_readdir = true;
+    TEST_ASSERT_EQUAL_INT(-1, sd_storage_list_next(&entry));
+    TEST_ASSERT_TRUE(sd_storage_list_close());
+    fail_readdir = false;
+    TEST_ASSERT_FALSE(sd_storage_dump_open("../LOG_0001.BIN"));
+    TEST_ASSERT_TRUE(sd_storage_dump_open("LOG_0001.BIN"));
+    TEST_ASSERT_FALSE(sd_storage_dump_open("LOG_0001.BIN"));
+    uint8_t bytes[32];
+    size_t count;
+    TEST_ASSERT_FALSE(sd_storage_dump_read(bytes, 33, &count));
+    TEST_ASSERT_TRUE(sd_storage_dump_read(bytes, sizeof(bytes), &count));
+    TEST_ASSERT_EQUAL_UINT(sizeof(bytes), count);
+    TEST_ASSERT_EQUAL_MEMORY(entries[0].data, bytes, sizeof(bytes));
+    size_t offset = count;
+    for (;;) {
+        TEST_ASSERT_TRUE(sd_storage_dump_read(bytes, 24, &count));
+        if (!count) break;
+        TEST_ASSERT_EQUAL_MEMORY(entries[0].data + offset, bytes, count);
+        offset += count;
+    }
+    TEST_ASSERT_EQUAL_UINT(entries[0].length, offset);
+    TEST_ASSERT_TRUE(sd_storage_dump_close());
+    TEST_ASSERT_FALSE(sd_storage_dump_read(bytes, sizeof(bytes), &count));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -327,5 +374,6 @@ int main(void)
     RUN_TEST(recovers_highest_numbered_final_log_only);
     RUN_TEST(invalid_newest_or_io_error_preserves_data);
     RUN_TEST(newest_v1_log_is_recovered);
+    RUN_TEST(list_and_dump_are_bounded_and_validate_names);
     return UNITY_END();
 }

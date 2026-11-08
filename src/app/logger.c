@@ -2,8 +2,10 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "firmware_version.h"
+#include "command_io.h"
 #include "log_writer.h"
 #include "sd_storage.h"
 #include "sensor.h"
@@ -30,6 +32,13 @@ enum { BATCH_COUNT = 4 };
 #define MSG_SYNC UINT32_C(0x50000000)
 #define MSG_RECOVERED UINT32_C(0x60000000)
 #define MSG_RECOVERY_ERRORS UINT32_C(0x70000000)
+#define MSG_STOP UINT32_C(0x80000000)
+#define MSG_START UINT32_C(0x90000000)
+#define MSG_FILE UINT32_C(0xa0000000)
+#define MSG_IO_REQUEST UINT32_C(0xb0000000)
+#define MSG_IO_ACK UINT32_C(0xc0000000)
+#define MSG_IO_REPLY UINT32_C(0xd0000000)
+#define MSG_IO_CANCEL UINT32_C(0xe0000000)
 
 typedef struct {
     _Alignas(512) uint8_t bytes[LOG_WRITE_CHUNK];
@@ -44,7 +53,113 @@ static unsigned int free_mask;
 static int active_batch = -1;
 static uint64_t batch_started, next_report, dropped, uncertain, worst_write_us, worst_sync_us;
 static uint64_t recovered_bytes, recovery_errors;
-static bool online;
+static bool online, control_ok = true;
+static logger_state_t state = LOGGER_RUNNING;
+static bool control_sent;
+static uint32_t start_rate, current_file;
+
+typedef struct { uint32_t kind; char name[COMMAND_FILENAME_MAX + 1]; } io_request_t;
+typedef struct { char line[64]; bool final; } io_reply_t;
+static io_request_t io_request;
+static io_reply_t io_reply;
+static bool io_busy, io_request_pending, io_reply_ready, io_ack_pending, io_cancel_pending;
+static bool io_cancelling;
+
+typedef struct {
+    uint32_t kind;
+    bool waiting, started, final;
+    uint64_t offset;
+    uint32_t crc;
+} worker_io_t;
+
+static void worker_io_close(worker_io_t *io)
+{
+    if (io->kind == 1) (void)sd_storage_list_close();
+    if (io->kind == 2) (void)sd_storage_dump_close();
+    *io = (worker_io_t){0};
+}
+
+static bool same_ascii_casefold(const char *a, const char *b)
+{
+    while (*a && *b) {
+        char x = *a++, y = *b++;
+        if (x >= 'a' && x <= 'z') x = (char)(x - 'a' + 'A');
+        if (y >= 'a' && y <= 'z') y = (char)(y - 'a' + 'A');
+        if (x != y) return false;
+    }
+    return *a == *b;
+}
+
+static void worker_io_begin(worker_io_t *io, const log_writer_t *storage)
+{
+    __dmb();
+    *io = (worker_io_t){.kind = io_request.kind, .crc = UINT32_MAX};
+    if (!storage->online) { (void)snprintf(io_reply.line, sizeof(io_reply.line), "ERR SD unavailable\n"); io->final = true; return; }
+    if (io->kind == 1) {
+        if (sd_storage_list_open()) return;
+    } else if (io->kind == 2) {
+        char current[16];
+        (void)snprintf(current, sizeof(current), "LOG_%04u.BIN", storage->current_number);
+        if (storage->file_open && same_ascii_casefold(current, io_request.name)) {
+            (void)snprintf(io_reply.line, sizeof(io_reply.line), "ERR active file; stop first\n");
+            io->final = true;
+            return;
+        }
+        if (sd_storage_dump_open(io_request.name)) return;
+    }
+    (void)snprintf(io_reply.line, sizeof(io_reply.line), "ERR open failed\n");
+    io->final = true;
+}
+
+static void worker_io_step(worker_io_t *io, bool media_online)
+{
+    if (!io->kind || io->waiting) return;
+    if (!media_online && !io->final) {
+        if (io->kind == 1) (void)sd_storage_list_close();
+        if (io->kind == 2) (void)sd_storage_dump_close();
+        (void)snprintf(io_reply.line, sizeof(io_reply.line), "ERR SD disconnected\n");
+        io->final = true;
+    } else if (!io->started && !io->final) {
+        if (io->kind == 1) (void)snprintf(io_reply.line, sizeof(io_reply.line), "BEGIN LS\n");
+        else (void)snprintf(io_reply.line, sizeof(io_reply.line), "BEGIN DUMP %s\n", io_request.name);
+        io->started = true;
+    } else if (!io->final && io->kind == 1) {
+        sd_list_entry_t entry;
+        int result = sd_storage_list_next(&entry);
+        if (result == 1) (void)snprintf(io_reply.line, sizeof(io_reply.line), "%s %s %" PRIu64 "\n",
+                                       entry.directory ? "DIR" : "FILE", entry.name, entry.size);
+        else if (result == 2) (void)snprintf(io_reply.line, sizeof(io_reply.line), "WARN unsupported filename\n");
+        else {
+            bool closed = sd_storage_list_close();
+            (void)snprintf(io_reply.line, sizeof(io_reply.line), result == 0 && closed ? "END LS\n" : "ERR list failed\n");
+            io->final = true;
+        }
+    } else if (!io->final) {
+        uint8_t data[24];
+        size_t count = 0;
+        if (!sd_storage_dump_read(data, sizeof(data), &count)) {
+            (void)sd_storage_dump_close();
+            (void)snprintf(io_reply.line, sizeof(io_reply.line), "ERR read failed\n");
+            io->final = true;
+        } else if (!count) {
+            bool ok = sd_storage_dump_close();
+            if (ok) (void)snprintf(io_reply.line, sizeof(io_reply.line), "END DUMP %" PRIu64 " %08" PRIx32 "\n",
+                                   io->offset, io->crc ^ UINT32_MAX);
+            else (void)snprintf(io_reply.line, sizeof(io_reply.line), "ERR close failed\n");
+            io->final = true;
+        } else {
+            char encoded[33];
+            (void)command_base64(data, count, encoded, sizeof(encoded));
+            io->crc = command_crc32_update(io->crc, data, count);
+            (void)snprintf(io_reply.line, sizeof(io_reply.line), "DATA %" PRIu64 " %s\n", io->offset, encoded);
+            io->offset += count;
+        }
+    }
+    io_reply.final = io->final;
+    io->waiting = true;
+    __dmb();
+    multicore_fifo_push_blocking(MSG_IO_REPLY);
+}
 
 static void send_delta(uint32_t kind, uint64_t *sent, uint64_t total)
 {
@@ -73,6 +188,8 @@ static void storage_worker(void)
     uint64_t sent_dropped = 0, sent_uncertain = 0, sent_worst = 0, sent_sync = 0;
     uint64_t sent_recovered = 0, sent_recovery_errors = 0;
     bool last_online = false, status_sent = false;
+    unsigned int last_file = 0;
+    worker_io_t io = {0};
     for (;;) {
         if (initialized) log_writer_maintain(&writer);
         bool current_online = initialized && writer.online;
@@ -89,7 +206,29 @@ static void storage_worker(void)
                 else writer.dropped += batches[index].count;
                 __dmb();
                 multicore_fifo_push_blocking(MSG_FREE | index);
+            } else if (index == MSG_STOP) {
+                bool ok = initialized && log_writer_pause(&writer);
+                multicore_fifo_push_blocking(MSG_STOP | (ok ? 1u : 0u));
+            } else if ((index & MSG_KIND_MASK) == MSG_START) {
+                bool ok = initialized && log_writer_resume(&writer, index & MSG_VALUE_MASK);
+                multicore_fifo_push_blocking(MSG_START | (ok ? 1u : 0u));
+            } else if (index == MSG_IO_REQUEST) {
+                if (!io.kind) worker_io_begin(&io, &writer);
+            } else if (index == MSG_IO_ACK) {
+                if (io.waiting) {
+                    if (io.final) worker_io_close(&io);
+                    else io.waiting = false;
+                }
+            } else if (index == MSG_IO_CANCEL) {
+                worker_io_close(&io);
+                multicore_fifo_push_blocking(MSG_IO_CANCEL);
             }
+        }
+        worker_io_step(&io, initialized && writer.online);
+        unsigned int file_number = initialized ? writer.current_number : 0;
+        if (file_number != last_file) {
+            multicore_fifo_push_blocking(MSG_FILE | file_number);
+            last_file = file_number;
         }
         send_delta(MSG_DROPPED, &sent_dropped, writer.dropped);
         send_delta(MSG_UNCERTAIN, &sent_uncertain, writer.uncertain);
@@ -118,6 +257,70 @@ void logger_start(void)
 
 void logger_note_drop(uint32_t count) { dropped += count; }
 
+bool logger_request_stop(void)
+{
+    if (state == LOGGER_STOPPED) return true;
+    if (state != LOGGER_RUNNING) return false;
+    state = LOGGER_STOPPING;
+    control_sent = false;
+    return true;
+}
+
+bool logger_request_start(uint32_t rate_hz)
+{
+    if (state != LOGGER_STOPPED || rate_hz < 1 || rate_hz > 50) return false;
+    start_rate = rate_hz;
+    state = LOGGER_STARTING;
+    control_sent = false;
+    return true;
+}
+
+void logger_get_status(logger_status_t *status)
+{
+    *status = (logger_status_t){state, online, control_ok, current_file, dropped, uncertain};
+}
+
+bool logger_io_busy(void) { return io_busy || io_ack_pending || io_cancel_pending; }
+
+bool logger_request_list(void)
+{
+    if (logger_io_busy()) return false;
+    io_request = (io_request_t){.kind = 1};
+    io_busy = io_request_pending = true;
+    return true;
+}
+
+bool logger_request_dump(const char *name)
+{
+    if (logger_io_busy() || !command_filename_valid(name)) return false;
+    io_request = (io_request_t){.kind = 2};
+    memcpy(io_request.name, name, strlen(name) + 1);
+    io_busy = io_request_pending = true;
+    return true;
+}
+
+bool logger_take_reply(char *line, size_t capacity, bool *final)
+{
+    if (!io_reply_ready || !line || !final) return false;
+    size_t length = strlen(io_reply.line);
+    if (length >= capacity) return false;
+    memcpy(line, io_reply.line, length + 1);
+    *final = io_reply.final;
+    io_reply_ready = false;
+    io_ack_pending = true;
+    if (*final) io_busy = false;
+    return true;
+}
+
+void logger_cancel_io(void)
+{
+    if (!io_busy || io_cancelling) return;
+    io_cancelling = true;
+    io_request_pending = false;
+    io_cancel_pending = true;
+    if (io_reply_ready) { io_reply_ready = false; io_ack_pending = true; }
+}
+
 void logger_report_boot(void)
 {
     printf("SD logging: BME280 records, rotate=%" PRIu32 " bytes, SPI1 GP10/11/12 CS13\n",
@@ -126,7 +329,7 @@ void logger_report_boot(void)
 
 void logger_poll(void)
 {
-    while (multicore_fifo_rvalid()) {
+    for (unsigned int n = 0; n < 8 && multicore_fifo_rvalid(); ++n) {
         uint32_t message = multicore_fifo_pop_blocking();
         __dmb();
         uint32_t value = message & MSG_VALUE_MASK;
@@ -139,11 +342,32 @@ void logger_poll(void)
             case MSG_RECOVERED: recovered_bytes += value; break;
             case MSG_RECOVERY_ERRORS: recovery_errors += value; break;
             case MSG_ONLINE: online = value != 0; break;
+            case MSG_FILE: current_file = value; break;
+            case MSG_STOP: control_ok = value != 0; state = LOGGER_STOPPED; control_sent = false; break;
+            case MSG_START: control_ok = value != 0; state = value ? LOGGER_RUNNING : LOGGER_STOPPED; control_sent = false; break;
+            case MSG_IO_REPLY:
+                if (io_busy && !io_cancelling) io_reply_ready = true;
+                else io_ack_pending = true;
+                break;
+            case MSG_IO_CANCEL: io_busy = io_cancelling = false; break;
             default: break;
         }
     }
+    if (io_ack_pending && multicore_fifo_wready()) {
+        multicore_fifo_push_blocking(MSG_IO_ACK);
+        io_ack_pending = false;
+    }
+    if (io_cancel_pending && multicore_fifo_wready()) {
+        multicore_fifo_push_blocking(MSG_IO_CANCEL);
+        io_cancel_pending = false;
+    }
+    if (io_request_pending && !io_ack_pending && !io_cancel_pending && multicore_fifo_wready()) {
+        __dmb();
+        multicore_fifo_push_blocking(MSG_IO_REQUEST);
+        io_request_pending = false;
+    }
     uint64_t now = time_us_64();
-    if (active_batch < 0 && free_mask) {
+    if ((state == LOGGER_RUNNING || (state == LOGGER_STOPPING && !control_sent)) && active_batch < 0 && free_mask) {
         for (unsigned int i = 0; i < BATCH_COUNT; ++i) {
             if (free_mask & (1u << i)) {
                 active_batch = (int)i;
@@ -153,10 +377,12 @@ void logger_poll(void)
             }
         }
     }
-    if (active_batch >= 0) {
+    bool drained = false;
+    if (active_batch >= 0 && (state == LOGGER_RUNNING || (state == LOGGER_STOPPING && !control_sent))) {
         log_batch_t *batch = &batches[active_batch];
         log_record_t record;
-        while (batch->count < LOG_RECORDS_PER_BATCH && sensor_take_sample(&record)) {
+        for (unsigned int n = 0; n < 8 && batch->count < LOG_RECORDS_PER_BATCH; ++n) {
+            if (!sensor_take_sample(&record)) { drained = true; break; }
             if (!batch->count) batch_started = now;
             if (log_encode_record(batch->bytes + batch->count * LOG_RECORD_SIZE, LOG_RECORD_SIZE, &record) != LOG_OK) {
                 ++dropped;
@@ -164,12 +390,25 @@ void logger_poll(void)
             }
             ++batch->count;
         }
-        if (batch->count && (batch->count == LOG_RECORDS_PER_BATCH || now - batch_started >= UINT64_C(1000000)) &&
+        if (batch->count && (batch->count == LOG_RECORDS_PER_BATCH || now - batch_started >= UINT64_C(1000000) ||
+                             (state == LOGGER_STOPPING && drained)) &&
             multicore_fifo_wready()) {
             __dmb();
             multicore_fifo_push_blocking((uint32_t)active_batch);
             active_batch = -1;
         }
+        if (state == LOGGER_STOPPING && drained && active_batch >= 0 && !batch->count) {
+            free_mask |= 1u << active_batch;
+            active_batch = -1;
+        }
+    }
+    if (state == LOGGER_STOPPING && drained && active_batch < 0 && !control_sent && multicore_fifo_wready()) {
+        multicore_fifo_push_blocking(MSG_STOP);
+        control_sent = true;
+    }
+    if (state == LOGGER_STARTING && !control_sent && multicore_fifo_wready()) {
+        multicore_fifo_push_blocking(MSG_START | start_rate);
+        control_sent = true;
     }
     if (now >= next_report) {
         if (stdio_usb_connected()) {

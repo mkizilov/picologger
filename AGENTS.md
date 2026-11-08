@@ -36,6 +36,7 @@ Extend this file with the project's language-specific architecture and verificat
 - GP26 ADC/DMA capture runs at a nominal 10 kHz; `docs/ADC_DMA.md` documents block integrity, fault handling and safe manual input checks.
 - SD logging and rotation are documented in `docs/SD_LOGGING.md`; the maximum file size is configured with `-DPICOLOGGER_LOG_ROTATE_BYTES=<integer>` (default 16777216).
 - Best-effort log recovery and the ten-cycle power-loss checklist are documented in `docs/POWER_LOSS.md`; do not claim FAT or card-level atomicity.
+- USB CDC commands, asynchronous stop/start, rate changes and checksummed dumps are documented in `docs/USB_COMMANDS.md`.
 - Run `scripts/check.sh` to build both targets and run host tests, with at most two workers.
 - Agents cannot flash or observe the board. Every task touching hardware ends with a numbered manual test checklist stating what to flash, connect, and expect; never claim unobserved results.
 - Definition of done for each future task: `scripts/check.sh` passes, relevant docs are updated, provide a short summary, and create a local conventional-commit Git commit. Report genuine environment limitations instead of claiming checks passed.

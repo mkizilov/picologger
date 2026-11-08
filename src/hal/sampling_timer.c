@@ -10,6 +10,7 @@ static struct repeating_timer timer;
  * This mailbox is not a cross-core or C-thread synchronization primitive. */
 static volatile uint32_t publication, timestamp_low, timestamp_high, sequence;
 static uint32_t last_sequence;
+static bool running;
 
 static bool timer_callback(struct repeating_timer *ignored)
 {
@@ -25,11 +26,20 @@ static bool timer_callback(struct repeating_timer *ignored)
 
 bool sampling_timer_start(uint32_t rate_hz)
 {
-    if (rate_hz == 0 || rate_hz > 50) return false;
+    if (running || rate_hz == 0 || rate_hz > 50) return false;
     gpio_init(TIMING_PIN);
     gpio_set_dir(TIMING_PIN, GPIO_OUT);
     gpio_put(TIMING_PIN, false);
-    return add_repeating_timer_us(-(int64_t)(1000000u / rate_hz), timer_callback, NULL, &timer);
+    running = add_repeating_timer_us(-(int64_t)(1000000u / rate_hz), timer_callback, NULL, &timer);
+    return running;
+}
+
+bool sampling_timer_stop(void)
+{
+    if (!running) return true;
+    if (!cancel_repeating_timer(&timer)) return false;
+    running = false;
+    return true;
 }
 
 bool sampling_timer_take(sampling_tick_t *tick)

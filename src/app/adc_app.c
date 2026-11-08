@@ -10,6 +10,7 @@
 static bool started, have_previous, have_values;
 static uint32_t expected_sequence, minimum, maximum, last_value;
 static uint64_t report_at, previous_us, elapsed_us, intervals, blocks, sequence_gaps, sample_errors;
+static uint64_t total_samples;
 static adc_block_t block;
 
 void adc_app_start(void)
@@ -35,6 +36,7 @@ static void process_block(const adc_block_t *record)
     previous_us = record->completed_us;
     have_previous = true;
     ++blocks;
+    total_samples += ADC_BLOCK_SAMPLES;
     for (unsigned int i = 0; i < ADC_BLOCK_SAMPLES; ++i) {
         uint16_t raw = record->samples[i];
         if (raw & 0x8000u) { ++sample_errors; continue; }
@@ -45,6 +47,9 @@ static void process_block(const adc_block_t *record)
         have_values = true;
     }
 }
+
+uint64_t adc_app_total_samples(void) { return total_samples; }
+uint32_t adc_app_fault(void) { return (uint32_t)adc_capture_fault(); }
 
 void adc_app_poll(void)
 {

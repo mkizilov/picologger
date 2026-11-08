@@ -36,8 +36,8 @@ typedef struct {
     _Alignas(512) uint8_t header[LOG_HEADER_V2_SIZE];
     size_t used;
     uint32_t record_limit, file_records, synced_records, written_bytes;
-    unsigned int next_name;
-    bool online;
+    unsigned int next_name, current_number;
+    bool online, enabled, file_open;
     uint64_t next_retry, next_sync, next_presence;
     uint64_t dropped, uncertain, worst_write_us, worst_sync_us, recovered_bytes, recovery_errors;
 } log_writer_t;
@@ -45,6 +45,9 @@ typedef struct {
 bool log_writer_init(log_writer_t *writer, const log_storage_t *storage,
                      const log_header_t *header, uint32_t rotate_bytes);
 void log_writer_maintain(log_writer_t *writer);
+/* These run only on the storage core; they can perform filesystem I/O. */
+bool log_writer_pause(log_writer_t *writer);
+bool log_writer_resume(log_writer_t *writer, uint32_t rate_hz);
 /* Input holds count pre-encoded, complete LOG_RECORD_SIZE records. */
 void log_writer_append(log_writer_t *writer, const uint8_t *records, size_t count);
 

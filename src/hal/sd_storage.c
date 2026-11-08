@@ -9,6 +9,9 @@
 
 static FATFS filesystem;
 static FIL file;
+static FIL dump_file;
+static DIR list_directory;
+static bool listing, dumping;
 static bool driver_initialized;
 
 static bool mount_card(void *context)
@@ -150,9 +153,64 @@ static bool close_file(void *context) { (void)context; return f_close(&file) == 
 static void unmount_card(void *context)
 {
     (void)context;
+    (void)sd_storage_list_close();
+    (void)sd_storage_dump_close();
     (void)f_mount(NULL, "0:", 0);
     sd_card_t *card = sd_get_by_num(0);
     if (driver_initialized && card) card->state.m_Status |= STA_NOINIT;
+}
+
+bool sd_storage_list_open(void)
+{
+    if (listing || f_opendir(&list_directory, "0:/") != FR_OK) return false;
+    listing = true;
+    return true;
+}
+
+int sd_storage_list_next(sd_list_entry_t *out)
+{
+    if (!listing || !out) return -1;
+    FILINFO entry;
+    if (f_readdir(&list_directory, &entry) != FR_OK) return -1;
+    if (!entry.fname[0]) return 0;
+    if (!command_filename_valid(entry.fname)) return 2;
+    memcpy(out->name, entry.fname, strlen(entry.fname) + 1);
+    out->size = (uint64_t)entry.fsize;
+    out->directory = (entry.fattrib & AM_DIR) != 0;
+    return 1;
+}
+
+bool sd_storage_list_close(void)
+{
+    if (!listing) return true;
+    listing = false;
+    return f_closedir(&list_directory) == FR_OK;
+}
+
+bool sd_storage_dump_open(const char *name)
+{
+    if (dumping || !command_filename_valid(name)) return false;
+    char path[COMMAND_FILENAME_MAX + 4];
+    (void)snprintf(path, sizeof(path), "0:/%s", name);
+    if (f_open(&dump_file, path, FA_READ | FA_OPEN_EXISTING) != FR_OK) return false;
+    dumping = true;
+    return true;
+}
+
+bool sd_storage_dump_read(uint8_t *data, size_t capacity, size_t *read)
+{
+    if (!dumping || !data || !read || capacity > 32) return false;
+    UINT actual = 0;
+    FRESULT result = f_read(&dump_file, data, (UINT)capacity, &actual);
+    *read = actual;
+    return result == FR_OK;
+}
+
+bool sd_storage_dump_close(void)
+{
+    if (!dumping) return true;
+    dumping = false;
+    return f_close(&dump_file) == FR_OK;
 }
 
 static bool card_present(void *context)

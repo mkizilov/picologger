@@ -7,7 +7,7 @@ typedef struct { int unused; } FATFS;
 typedef uint64_t FSIZE_t;
 typedef struct { int index; FSIZE_t position; bool open; } FIL;
 typedef struct { unsigned int position; } DIR;
-typedef struct { char fname[256]; unsigned char fattrib; } FILINFO;
+typedef struct { char fname[256]; unsigned char fattrib; FSIZE_t fsize; } FILINFO;
 typedef unsigned int UINT;
 typedef enum { FR_OK, FR_EXIST, FR_DISK_ERR, FR_NO_FILE } FRESULT;
 enum { FA_READ = 1, FA_WRITE = 2, FA_CREATE_NEW = 4, FA_OPEN_EXISTING = 0, AM_DIR = 0x10 };

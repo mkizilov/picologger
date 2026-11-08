@@ -8,6 +8,8 @@ static void disconnect(log_writer_t *writer)
     writer->uncertain += writer->file_records - writer->synced_records;
     writer->storage.unmount(writer->storage.context);
     writer->online = false;
+    writer->file_open = false;
+    writer->current_number = 0;
     writer->file_records = writer->synced_records = writer->written_bytes = 0;
     writer->used = 0;
     writer->next_retry = writer->storage.now_us(writer->storage.context) + LOG_RETRY_US;
@@ -25,6 +27,8 @@ static bool create_file(log_writer_t *writer)
         if (sync_us > writer->worst_sync_us) writer->worst_sync_us = sync_us;
         if (result == 1) continue;
         if (result != 0) return false;
+        writer->file_open = true;
+        writer->current_number = writer->next_name - 1;
         writer->used = 0;
         writer->file_records = writer->synced_records = 0;
         writer->written_bytes = LOG_HEADER_V2_SIZE;
@@ -63,7 +67,39 @@ static bool rotate(log_writer_t *writer)
 {
     if ((writer->used && !write_chunk(writer)) || !sync_file(writer) ||
         !writer->storage.close(writer->storage.context)) return false;
+    writer->file_open = false;
+    writer->current_number = 0;
     return create_file(writer);
+}
+
+bool log_writer_pause(log_writer_t *writer)
+{
+    if (!writer->enabled) return true;
+    writer->enabled = false;
+    if (!writer->online || !writer->file_open) return true;
+    if ((writer->used && !write_chunk(writer)) || !sync_file(writer) ||
+        !writer->storage.close(writer->storage.context)) {
+        disconnect(writer);
+        return false;
+    }
+    writer->file_open = false;
+    writer->current_number = 0;
+    writer->used = 0;
+    writer->file_records = writer->synced_records = writer->written_bytes = 0;
+    return true;
+}
+
+bool log_writer_resume(log_writer_t *writer, uint32_t rate_hz)
+{
+    if (rate_hz < 1 || rate_hz > 50) return false;
+    if (writer->enabled) return true;
+    log_header_t header;
+    if (log_decode_header(&header, writer->header, sizeof(writer->header)) != LOG_OK) return false;
+    header.sample_rate_hz = rate_hz;
+    if (log_encode_header_v2(writer->header, sizeof(writer->header), &header) != LOG_OK) return false;
+    writer->enabled = true;
+    if (writer->online && !create_file(writer)) disconnect(writer);
+    return true;
 }
 
 bool log_writer_init(log_writer_t *writer, const log_storage_t *storage,
@@ -74,6 +110,7 @@ bool log_writer_init(log_writer_t *writer, const log_storage_t *storage,
         rotate_bytes < LOG_WRITE_CHUNK * 2u) return false;
     memset(writer, 0, sizeof(*writer));
     writer->storage = *storage;
+    writer->enabled = true;
     writer->record_limit = (rotate_bytes - LOG_HEADER_V2_SIZE) / LOG_RECORD_SIZE;
     return log_encode_header_v2(writer->header, sizeof(writer->header), header) == LOG_OK;
 }
@@ -93,7 +130,7 @@ void log_writer_maintain(log_writer_t *writer)
         }
         if (found) writer->recovered_bytes += recovered.original_size - recovered.recovered_size;
         writer->next_name = 1;
-        if (!create_file(writer)) { disconnect(writer); return; }
+        if (writer->enabled && !create_file(writer)) { disconnect(writer); return; }
         writer->online = true;
         now = writer->storage.now_us(writer->storage.context);
         writer->next_sync = now + LOG_SYNC_US;
@@ -103,17 +140,17 @@ void log_writer_maintain(log_writer_t *writer)
     if (now >= writer->next_presence) {
         /* Ensure the SPI driver has finished any multi-block write before
          * issuing the card-presence command. */
-        if (!sync_file(writer)) { disconnect(writer); return; }
+        if (writer->file_open && !sync_file(writer)) { disconnect(writer); return; }
         if (!writer->storage.present(writer->storage.context)) { disconnect(writer); return; }
         now = writer->storage.now_us(writer->storage.context);
         writer->next_presence = now + LOG_PRESENCE_US;
-    } else if (now >= writer->next_sync && !sync_file(writer)) disconnect(writer);
+    } else if (writer->file_open && now >= writer->next_sync && !sync_file(writer)) disconnect(writer);
 }
 
 void log_writer_append(log_writer_t *writer, const uint8_t *records, size_t count)
 {
     for (size_t index = 0; index < count; ++index) {
-        if (!writer->online) { writer->dropped += count - index; return; }
+        if (!writer->enabled || !writer->online || !writer->file_open) { writer->dropped += count - index; return; }
         if (writer->file_records == writer->record_limit && !rotate(writer)) {
             disconnect(writer);
             writer->dropped += count - index;

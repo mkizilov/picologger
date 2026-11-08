@@ -20,6 +20,8 @@ The binary log format and Python CSV decoder are described in
 limitations are in [docs/SD_LOGGING.md](docs/SD_LOGGING.md).
 Best-effort power-loss recovery and its ten-cycle manual test are described in
 [docs/POWER_LOSS.md](docs/POWER_LOSS.md).
+The USB CDC commands, live stream and checksummed dump are documented in
+[docs/USB_COMMANDS.md](docs/USB_COMMANDS.md).
 
 ## Initial environment verification
 
@@ -48,3 +50,4 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 6. Follow [docs/ADC_DMA.md](docs/ADC_DMA.md) for safe analog input wiring and ADC/DMA checks.
 7. Follow [docs/SD_LOGGING.md](docs/SD_LOGGING.md) for SD wiring, rotation and removal checks.
 8. Follow [docs/POWER_LOSS.md](docs/POWER_LOSS.md) for ten manual power-loss trials.
+9. Follow [docs/USB_COMMANDS.md](docs/USB_COMMANDS.md) for command, stream and dump checks.

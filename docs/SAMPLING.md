@@ -1,7 +1,8 @@
 # Timer-driven BME280 sampling
 
 The default is 50 Hz. Configure an integer rate from 1 through 50 Hz at CMake
-configure time, for example:
+configure time, or use the USB `rate` command after `stop` (see
+`USB_COMMANDS.md`). The runtime value resets at reboot. For example:
 
 ```sh
 cmake --preset firmware -DPICOLOGGER_SAMPLE_RATE_HZ=25

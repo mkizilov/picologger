@@ -38,7 +38,7 @@ preserved, not automatically deleted or promoted.
 
 Records are accumulated in a 512-byte-aligned buffer and normally submitted in
 4096-byte chunks from sector-aligned offsets. The initial 512-byte header write
-and the final shorter rotation write are deliberate exceptions. Both v2 header
+and final shorter rotation or USB-stop write are deliberate exceptions. Both v2 header
 and normal chunks end on record boundaries. The default rotation limit is
 16 MiB. To change it:
 
@@ -55,8 +55,9 @@ after its 512-byte header. Existing `.BIN` or `.TMP` names are skipped. If all
 `f_sync` is attempted about every five seconds, and before rotation. It syncs
 bytes already submitted to FatFs, **not** the incomplete 4 KiB RAM chunk or
 records still in the core-0 ring/batches. At low sample rates a partial chunk
-can remain in RAM much longer than five seconds. There is currently no clean
-stop/eject command; powering down or removing a card can lose buffered data,
+can remain in RAM much longer than five seconds. USB `stop` flushes and closes
+the current log, but the volume remains mounted and there is no eject command;
+powering down or removing a card can still lose buffered data,
 leave a partial trailing record or an orphan `.TMP`. Use the decoder's
 truncation/CRC diagnostics and do not assume a recent sync means every sample
 is durable.

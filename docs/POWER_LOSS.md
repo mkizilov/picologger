@@ -17,13 +17,14 @@ the format, wiring, batching and durability limits.
    least one ten-second status report before the next cut. Record the cycle
    number, `recovered_bytes`, `recovery_errors`, `dropped` and `uncertain`.
    Do not remove or hot-swap the card during the ten trials.
-3. After trial ten, allow recovery to finish. For a final inspection pass,
-   power down, disconnect the BME280 while unpowered, then boot once more with
-   the card still inserted. Wait for `SD online=1` and at least one status
-   report. With no sensor samples, the new file should contain only its synced
-   header. Power down and move the card to a computer. These extra power cycles
-   are preparation/inspection, not part of the ten trials; there is no clean
-   eject command, so even this procedure cannot eliminate all write risk.
+3. After trial ten, allow recovery to finish, send USB `stop` and wait for
+   `@OK stopped`. For a final inspection pass, power down, disconnect the
+   BME280 while unpowered, then boot once more with the card still inserted.
+   Wait for `SD online=1`, send `stop` and wait for `@OK stopped`. With no
+   sensor samples, the new file should contain only its synced header. Power
+   down and move the card to a computer. These extra power cycles are
+   preparation/inspection, not part of the ten trials; there is no eject
+   command, so even this procedure cannot eliminate all write risk.
 4. From the project directory, decode **every** `LOG_*.BIN` on the card, for
    example after substituting the card's path:
 

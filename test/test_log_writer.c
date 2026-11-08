@@ -235,6 +235,50 @@ static void successful_recovery_precedes_new_file(void)
     TEST_ASSERT_EQUAL_STRING("0:/LOG_0002.BIN", fs.names[0]);
 }
 
+static void pause_flushes_and_resume_publishes_new_rate(void)
+{
+    log_writer_maintain(&writer);
+    log_writer_append(&writer, records, 3);
+    TEST_ASSERT_TRUE(log_writer_pause(&writer));
+    TEST_ASSERT_FALSE(writer.enabled);
+    TEST_ASSERT_FALSE(writer.file_open);
+    TEST_ASSERT_EQUAL_UINT(1, fs.closes);
+    TEST_ASSERT_EQUAL_UINT(1, fs.syncs);
+    TEST_ASSERT_EQUAL_UINT(3 * LOG_RECORD_SIZE, fs.write_lengths[0]);
+    TEST_ASSERT_EQUAL_UINT(LOG_HEADER_V2_SIZE + 3 * LOG_RECORD_SIZE, fs.size[0]);
+    log_writer_append(&writer, records, 1);
+    TEST_ASSERT_EQUAL_UINT64(1, writer.dropped);
+    TEST_ASSERT_FALSE(log_writer_resume(&writer, 51));
+    TEST_ASSERT_TRUE(log_writer_resume(&writer, 25));
+    TEST_ASSERT_TRUE(writer.enabled);
+    TEST_ASSERT_TRUE(writer.file_open);
+    TEST_ASSERT_EQUAL_UINT(3, writer.current_number);
+    log_header_t header;
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, fs.data[1], fs.size[1]));
+    TEST_ASSERT_EQUAL_UINT32(25, header.sample_rate_hz);
+}
+
+static void failed_pause_reports_uncertain_and_can_resume_offline(void)
+{
+    log_writer_maintain(&writer);
+    log_writer_append(&writer, records, 3);
+    fs.fail_sync = true;
+    TEST_ASSERT_FALSE(log_writer_pause(&writer));
+    TEST_ASSERT_FALSE(writer.enabled);
+    TEST_ASSERT_FALSE(writer.online);
+    TEST_ASSERT_EQUAL_UINT64(3, writer.uncertain);
+    TEST_ASSERT_TRUE(log_writer_resume(&writer, 20));
+    TEST_ASSERT_TRUE(writer.enabled);
+    TEST_ASSERT_FALSE(writer.online);
+    fs.fail_sync = false;
+    fs.now += LOG_RETRY_US;
+    log_writer_maintain(&writer);
+    TEST_ASSERT_TRUE(writer.online);
+    log_header_t header;
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, fs.data[1], fs.size[1]));
+    TEST_ASSERT_EQUAL_UINT32(20, header.sample_rate_hz);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -248,5 +292,7 @@ int main(void)
     RUN_TEST(rejects_invalid_writer_configuration);
     RUN_TEST(recovery_failure_blocks_new_file_without_overwriting);
     RUN_TEST(successful_recovery_precedes_new_file);
+    RUN_TEST(pause_flushes_and_resume_publishes_new_rate);
+    RUN_TEST(failed_pause_reports_uncertain_and_can_resume_offline);
     return UNITY_END();
 }

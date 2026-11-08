@@ -10,8 +10,13 @@
 #include "logger.h"
 #include "ring_buffer.h"
 #include "sampling_timer.h"
+#include "usb_console.h"
 #include "pico/stdlib.h"
 #include "pico/stdio_usb.h"
+
+#ifndef PICOLOGGER_SAMPLE_RATE_HZ
+#define PICOLOGGER_SAMPLE_RATE_HZ 50
+#endif
 
 static bool found[128];
 static unsigned int scan_errors;
@@ -20,16 +25,14 @@ static bme280_result_t id_results[2];
 static bool id_checked[2];
 static bme280_t sensor;
 static bme280_result_t sensor_result = BME280_NO_DATA;
-static bool waiting_for_reset, ready, timer_failed, have_latest;
+static bool waiting_for_reset, ready, timer_failed, have_latest, running, desired_running = true;
 static uint64_t reset_time, next_read, stats_start, missed, read_errors;
 static interval_stats_t intervals;
 static uint32_t previous_sequence;
+static uint32_t rate_hz = PICOLOGGER_SAMPLE_RATE_HZ, ring_high_water;
+static uint64_t total_samples, total_missed, total_read_errors;
 static ring_local_t samples;
 static log_record_t sample_storage[256], latest;
-
-#ifndef PICOLOGGER_SAMPLE_RATE_HZ
-#define PICOLOGGER_SAMPLE_RATE_HZ 50
-#endif
 
 void sensor_start(void)
 {
@@ -84,22 +87,66 @@ void sensor_report_boot(void)
 static void sample_once(const sampling_tick_t *tick)
 {
     missed += (uint32_t)(tick->sequence - previous_sequence - 1u);
+    total_missed += (uint32_t)(tick->sequence - previous_sequence - 1u);
     previous_sequence = tick->sequence;
     interval_stats_observe(&intervals, tick->timestamp_us);
     bme280_reading_t reading;
     sampling_pulse_begin();
     sensor_result = bme280_read(&sensor, &reading);
     sampling_pulse_end();
-    if (sensor_result != BME280_OK) { ++read_errors; return; }
+    if (sensor_result != BME280_OK) { ++read_errors; ++total_read_errors; return; }
     log_record_t record = {.sequence = tick->sequence, .timestamp_us = tick->timestamp_us,
         .values = {reading.temperature_centi_c, (int32_t)(reading.pressure_pa_q24_8 / 256),
                    (int32_t)reading.humidity_rh_q22_10, 0}, .flags = 0};
     latest = record;
     have_latest = true;
+    ++total_samples;
+    usb_console_sample(&record);
     if (!ring_local_push(&samples, &record)) logger_note_drop(1);
+    uint32_t occupancy = samples.head - samples.tail;
+    if (occupancy > ring_high_water) ring_high_water = occupancy;
 }
 
 bool sensor_take_sample(log_record_t *record) { return ring_local_pop(&samples, record); }
+
+bool sensor_set_running(bool enable)
+{
+    if (enable == running) { desired_running = enable; return true; }
+    if (enable) {
+        if (!ready) return false;
+        if (!sampling_timer_start(rate_hz)) { timer_failed = true; return false; }
+        running = true;
+        desired_running = true;
+        timer_failed = false;
+        interval_stats_reset_window(&intervals);
+        intervals.have_previous = false;
+        stats_start = time_us_64();
+        return true;
+    }
+    if (!sampling_timer_stop()) return false;
+    sampling_tick_t pending;
+    if (sampling_timer_take(&pending)) {
+        uint32_t skipped = pending.sequence - previous_sequence;
+        missed += skipped;
+        total_missed += skipped;
+        previous_sequence = pending.sequence;
+    }
+    running = false;
+    desired_running = false;
+    return true;
+}
+
+bool sensor_set_rate(uint32_t value)
+{
+    if (running || value < 1 || value > 50) return false;
+    rate_hz = value;
+    return true;
+}
+
+void sensor_get_status(sensor_status_t *status)
+{
+    *status = (sensor_status_t){total_samples, total_missed, total_read_errors, ring_high_water, rate_hz, running, ready};
+}
 
 static void report_statistics(uint64_t now)
 {
@@ -126,22 +173,24 @@ void sensor_poll(void)
             sensor_result = bme280_configure(&sensor, &config);
             if (sensor_result == BME280_OK) {
                 waiting_for_reset = false;
-                ready = sampling_timer_start(PICOLOGGER_SAMPLE_RATE_HZ);
-                timer_failed = !ready;
-                if (ready) stats_start = time_us_64();
+                ready = true;
+                running = desired_running && sampling_timer_start(rate_hz);
+                timer_failed = desired_running && !running;
+                if (running) stats_start = time_us_64();
             }
         }
         if (sensor_result != BME280_OK && sensor_result != BME280_BUSY) waiting_for_reset = false;
         if (now - reset_time > 100000 && !ready) { waiting_for_reset = false; sensor_result = BME280_BUSY; }
     }
     sampling_tick_t tick;
-    if (ready && sampling_timer_take(&tick)) sample_once(&tick);
+    if (running && sampling_timer_take(&tick)) sample_once(&tick);
     now = time_us_64();
     report_statistics(now);
     if (now < next_read) return;
     next_read = now + 1000000;
     if (!stdio_usb_connected()) return;
     if (timer_failed) { puts("Sampling timer initialization failed"); return; }
+    if (ready && !running) { puts("BME280 sampling stopped"); return; }
     if (!have_latest || sensor_result != BME280_OK) {
         printf("BME280 read unavailable (status %d)\n", (int)sensor_result);
         return;
