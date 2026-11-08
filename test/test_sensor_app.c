@@ -8,12 +8,20 @@
 static uint8_t registers[256];
 static uint64_t clock_us;
 static bool connected, fail_data;
-static unsigned int probes, data_reads, writes, pulse_starts, pulse_ends;
+static unsigned int probes, data_reads, writes, pulse_starts, pulse_ends, dropped_records;
 static uint32_t timer_rate, sequence;
 static bool tick_pending, pin_high;
 static sampling_tick_t pending_tick;
 
 void i2c_bus_init(void) {}
+void logger_note_drop(uint32_t count) { dropped_records += count; }
+static unsigned int drain_samples(void)
+{
+    log_record_t record;
+    unsigned int count = 0;
+    while (sensor_take_sample(&record)) ++count;
+    return count;
+}
 int i2c_bus_probe(uint8_t address)
 {
     ++probes;
@@ -96,6 +104,7 @@ static void boot_scan_reset_and_timed_sample(void)
     clock_us = 22000;
     post_tick();
     sensor_poll();
+    drain_samples();
     TEST_ASSERT_EQUAL_UINT(1, data_reads);
     TEST_ASSERT_EQUAL_UINT(1, pulse_starts);
     TEST_ASSERT_EQUAL_UINT(1, pulse_ends);
@@ -105,6 +114,7 @@ static void boot_scan_reset_and_timed_sample(void)
     clock_us = 62000;
     post_tick();
     sensor_poll();
+    drain_samples();
     TEST_ASSERT_EQUAL_UINT(2, data_reads);
     sensor_poll();
     TEST_ASSERT_EQUAL_UINT(2, data_reads);
@@ -112,6 +122,7 @@ static void boot_scan_reset_and_timed_sample(void)
         clock_us = 2000 + i * UINT64_C(20000);
         post_tick();
         sensor_poll();
+        drain_samples();
     }
     TEST_ASSERT_EQUAL_UINT(499, data_reads);
     TEST_ASSERT_EQUAL_UINT(data_reads, pulse_starts);
@@ -121,6 +132,7 @@ static void boot_scan_reset_and_timed_sample(void)
     clock_us += 20000;
     post_tick();
     sensor_poll();
+    drain_samples();
     TEST_ASSERT_EQUAL_UINT(500, data_reads);
     TEST_ASSERT_EQUAL_UINT(data_reads, pulse_starts);
     TEST_ASSERT_EQUAL_UINT(data_reads, pulse_ends);
@@ -131,6 +143,14 @@ static void boot_scan_reset_and_timed_sample(void)
     sensor_poll();
     clock_us = 30002000;
     sensor_poll();
+    fail_data = false;
+    for (unsigned int i = 0; i < 300; ++i) {
+        clock_us += 20000;
+        post_tick();
+        sensor_poll();
+    }
+    TEST_ASSERT_EQUAL_UINT(44, dropped_records);
+    TEST_ASSERT_EQUAL_UINT(256, drain_samples());
 }
 
 int main(void)

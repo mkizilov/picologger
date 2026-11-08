@@ -15,8 +15,9 @@ Timer sampling configuration and GP15 measurements are described in
 The 10 kHz GP26 ADC/DMA path and its integrity checks are described in
 [docs/ADC_DMA.md](docs/ADC_DMA.md).
 
-The portable binary log format and the Python CSV decoder are described in
-[docs/LOG_FORMAT.md](docs/LOG_FORMAT.md). The firmware does not yet write logs.
+The binary log format and Python CSV decoder are described in
+[docs/LOG_FORMAT.md](docs/LOG_FORMAT.md); SD wiring, buffering and removal
+limitations are in [docs/SD_LOGGING.md](docs/SD_LOGGING.md).
 
 ## Initial environment verification
 
@@ -43,3 +44,4 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 4. Follow [docs/BME280.md](docs/BME280.md) for sensor wiring, scan, readings and chip-ID troubleshooting.
 5. Follow [docs/SAMPLING.md](docs/SAMPLING.md) for the GP15 timing trace and interval-statistics checks.
 6. Follow [docs/ADC_DMA.md](docs/ADC_DMA.md) for safe analog input wiring and ADC/DMA checks.
+7. Follow [docs/SD_LOGGING.md](docs/SD_LOGGING.md) for SD wiring, rotation and removal checks.

@@ -7,6 +7,7 @@
 #include "i2c_bus.h"
 #include "interval_stats.h"
 #include "log_format.h"
+#include "logger.h"
 #include "ring_buffer.h"
 #include "sampling_timer.h"
 #include "pico/stdlib.h"
@@ -24,7 +25,7 @@ static uint64_t reset_time, next_read, stats_start, missed, read_errors;
 static interval_stats_t intervals;
 static uint32_t previous_sequence;
 static ring_local_t samples;
-static log_record_t sample_storage[32], latest;
+static log_record_t sample_storage[256], latest;
 
 #ifndef PICOLOGGER_SAMPLE_RATE_HZ
 #define PICOLOGGER_SAMPLE_RATE_HZ 50
@@ -33,7 +34,7 @@ static log_record_t sample_storage[32], latest;
 void sensor_start(void)
 {
     i2c_bus_init();
-    (void)ring_local_init(&samples, sample_storage, sizeof(sample_storage), 32, sizeof(sample_storage[0]));
+    (void)ring_local_init(&samples, sample_storage, sizeof(sample_storage), 256, sizeof(sample_storage[0]));
     for (unsigned int address = 8; address <= 0x77; ++address) {
         int result = i2c_bus_probe((uint8_t)address);
         if (result > 0) found[address] = true;
@@ -93,10 +94,12 @@ static void sample_once(const sampling_tick_t *tick)
     log_record_t record = {.sequence = tick->sequence, .timestamp_us = tick->timestamp_us,
         .values = {reading.temperature_centi_c, (int32_t)(reading.pressure_pa_q24_8 / 256),
                    (int32_t)reading.humidity_rh_q22_10, 0}, .flags = 0};
-    if (!ring_local_push(&samples, &record)) return;
-    /* Until SD logging exists, the main loop consumes the ring for display. */
-    while (ring_local_pop(&samples, &latest)) have_latest = true;
+    latest = record;
+    have_latest = true;
+    if (!ring_local_push(&samples, &record)) logger_note_drop(1);
 }
+
+bool sensor_take_sample(log_record_t *record) { return ring_local_pop(&samples, record); }
 
 static void report_statistics(uint64_t now)
 {

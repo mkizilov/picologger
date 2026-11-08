@@ -2,8 +2,8 @@
 
 All integers are little-endian. No C structure layout or padding is written to
 disk. Files consist of one 60-byte header followed by zero or more 32-byte
-records. Firmware does not yet write logs; the format and host decoder are ready
-for later integration. Channel IDs and value units are application-defined.
+records. Firmware currently writes BME280 records; channel IDs and units for
+those files are documented in `SD_LOGGING.md`.
 
 ## Header (60 bytes)
 
