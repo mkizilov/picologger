@@ -39,6 +39,8 @@ database and local Arm headers; core, Unix and security analyzer checks are
 enabled, with warnings treated as errors. Its Annex K deprecated-buffer check is
 excluded because newlib lacks those replacements and that checker flags bounded
 `snprintf` calls. Compiler diagnostics and other enabled checks remain active.
+The script also runs HIL helper tests and confirms the hardware cases skip
+without an explicit port; see `HIL.md` before an operator enables them.
 
 ## Manual checklist (not performed)
 

@@ -43,6 +43,7 @@ Extend this file with the project's language-specific architecture and verificat
 - Core 0 publishes BME records to a 1024-record SPSC ring; core 1 drains it and owns FatFs. `docs/DUAL_CORE.md` covers ordering and unmeasured jitter comparison.
 - Low-rate sleep, clock changes and unmeasured power checks are documented in `docs/POWER.md`; Pico W falls back to normal clocks.
 - The serial CLI and verified dump/plot checks are documented in `docs/HOST_TOOLS.md`. Setup installs pinned Python tools in `.venv`.
+- `tests/hil/` skips unless an operator explicitly supplies `--hil-port`; it writes settings and SD logs and reboots. Agents must not run it against hardware. See `docs/HIL.md`.
 - Run `scripts/check.sh` for both firmware boards, sanitized host tests, clang-tidy and Python tests, with at most two workers.
 - Agents cannot flash or observe the board. Every task touching hardware ends with a numbered manual test checklist stating what to flash, connect, and expect; never claim unobserved results.
 - Definition of done for each future task: `scripts/check.sh` passes, relevant docs are updated, provide a short summary, and create a local conventional-commit Git commit. Report genuine environment limitations instead of claiming checks passed.

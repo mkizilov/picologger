@@ -25,3 +25,4 @@ for board in pico pico_w; do
 done
 .venv/bin/python scripts/run_clang_tidy.py
 MPLBACKEND=Agg .venv/bin/python -m unittest discover -s test -p 'test_logger_cli.py'
+.venv/bin/python -m pytest -q tests
