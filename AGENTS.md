@@ -32,6 +32,7 @@ Extend this file with the project's language-specific architecture and verificat
 - Run `scripts/setup.sh` to initialize the pinned pico-sdk and its submodules, install Arm GNU Toolchain 13.3.Rel1 locally in `.toolchain/`, and create `.venv`. Network access, CMake 3.21+, Git, Python 3, curl, tar, a native compiler and make are required. Unity and picotool are fetched during CMake configuration/build.
 - Host: `cmake --preset host`, `cmake --build --preset host`, `ctest --preset host`. Host project code is built with `-Wall -Wextra -Werror`.
 - Firmware: `cmake --preset firmware`, `cmake --build --preset firmware`. The output is `build/firmware/picologger.uf2`.
+- Sampling rate is configured at CMake time with `-DPICOLOGGER_SAMPLE_RATE_HZ=<integer>` from 1 to 50 (default 50); `docs/SAMPLING.md` describes the GP15 timing signal and manual checks.
 - Run `scripts/check.sh` to build both targets and run host tests, with at most two workers.
 - Agents cannot flash or observe the board. Every task touching hardware ends with a numbered manual test checklist stating what to flash, connect, and expect; never claim unobserved results.
 - Definition of done for each future task: `scripts/check.sh` passes, relevant docs are updated, provide a short summary, and create a local conventional-commit Git commit. Report genuine environment limitations instead of claiming checks passed.

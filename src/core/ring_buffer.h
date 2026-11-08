@@ -29,4 +29,17 @@ bool ring_buffer_pop(ring_buffer_t *ring, void *record);
 /* An atomic snapshot of rejected pushes; may be read by either side. */
 uint32_t ring_buffer_overflows(const ring_buffer_t *ring);
 
+/* Single-context variant: push and pop must both run in the same non-ISR
+ * context. Unlike ring_buffer_t it is not safe across interrupts or cores. */
+typedef struct {
+    unsigned char *storage;
+    size_t record_size;
+    uint32_t capacity, head, tail, overflows;
+} ring_local_t;
+
+bool ring_local_init(ring_local_t *ring, void *storage, size_t storage_bytes,
+                     uint32_t capacity, size_t record_size);
+bool ring_local_push(ring_local_t *ring, const void *record);
+bool ring_local_pop(ring_local_t *ring, void *record);
+
 #endif

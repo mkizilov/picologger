@@ -96,6 +96,25 @@ static void single_slot_capacity(void)
     TEST_ASSERT_FALSE(ring_buffer_pop(&ring, &out));
 }
 
+static void single_context_ring_preserves_records_and_counts_overflow(void)
+{
+    ring_local_t ring;
+    record_t storage[2], out, one = {1, ~UINT32_C(1)}, two = {2, ~UINT32_C(2)};
+    TEST_ASSERT_FALSE(ring_local_init(&ring, storage, sizeof(storage), 3, sizeof(one)));
+    TEST_ASSERT_TRUE(ring_local_init(&ring, storage, sizeof(storage), 2, sizeof(one)));
+    TEST_ASSERT_FALSE(ring_local_pop(&ring, &out));
+    ring.head = ring.tail = UINT32_MAX;
+    TEST_ASSERT_TRUE(ring_local_push(&ring, &one));
+    TEST_ASSERT_TRUE(ring_local_push(&ring, &two));
+    TEST_ASSERT_FALSE(ring_local_push(&ring, &one));
+    TEST_ASSERT_EQUAL_UINT32(1, ring.overflows);
+    TEST_ASSERT_TRUE(ring_local_pop(&ring, &out));
+    TEST_ASSERT_EQUAL_UINT32(1, out.sequence);
+    TEST_ASSERT_TRUE(ring_local_pop(&ring, &out));
+    TEST_ASSERT_EQUAL_UINT32(2, out.sequence);
+    TEST_ASSERT_FALSE(ring_local_pop(&ring, &out));
+}
+
 enum { STRESS_RECORDS = 10000000, STRESS_CAPACITY = 1024 };
 typedef struct {
     ring_buffer_t ring;
@@ -161,6 +180,7 @@ int main(void)
     RUN_TEST(empty_full_and_overflow);
     RUN_TEST(wraparound_and_counter_wrap);
     RUN_TEST(single_slot_capacity);
+    RUN_TEST(single_context_ring_preserves_records_and_counts_overflow);
     RUN_TEST(pthread_stress_ten_million_records);
     return UNITY_END();
 }

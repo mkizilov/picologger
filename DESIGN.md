@@ -1,7 +1,7 @@
 # PicoLogger design
 
 The target is a Raspberry Pi Pico (RP2040), with no RTOS. The current firmware
-blinks its onboard LED, scans I²C and prints BME280 readings over USB serial; it
+blinks its onboard LED, scans I²C, samples the BME280 from timer triggers and prints readings over USB serial; it
 does not yet sample the ADC or write storage. A repeating hardware timer toggles the
 Pico LED every 500 ms. On Pico W the timer changes the desired state and the main
 loop applies it to CYW43, avoiding wireless-driver calls in interrupt context.
@@ -25,6 +25,10 @@ not yet connected to sampling or storage. Buffer sizing and recovery from card
 errors remain design work. The BME280 is an I2C sensor; its current once-per-second
 printing is independent of the planned ADC DMA sampling and log storage.
 
+The Pico SDK's RP2040 atomic helpers are not lock-free and can mask interrupts.
+The BME280 sampling path instead keeps completed records in a main-loop-only
+ring, fed by a single-core timer mailbox; it drains those records for display,
+not SD. Its limitations and timing measurement are in `docs/SAMPLING.md`.
 The available Apple Clang Cortex-M0 cross-target lowered 32-bit C11 atomic
 loads/stores to `__atomic_*` helper calls; that is not evidence about the pinned
 Arm GNU compiler. Before integrating the queue with RP2040 interrupts, check

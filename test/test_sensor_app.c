@@ -1,13 +1,17 @@
 #include "unity.h"
 #include "sensor.h"
 #include "i2c_bus.h"
+#include "sampling_timer.h"
 
 #include <string.h>
 
 static uint8_t registers[256];
 static uint64_t clock_us;
-static bool connected;
-static unsigned int probes, data_reads, writes;
+static bool connected, fail_data;
+static unsigned int probes, data_reads, writes, pulse_starts, pulse_ends;
+static uint32_t timer_rate, sequence;
+static bool tick_pending, pin_high;
+static sampling_tick_t pending_tick;
 
 void i2c_bus_init(void) {}
 int i2c_bus_probe(uint8_t address)
@@ -17,12 +21,31 @@ int i2c_bus_probe(uint8_t address)
 }
 uint64_t time_us_64(void) { return clock_us; }
 bool stdio_usb_connected(void) { return connected; }
+bool sampling_timer_start(uint32_t rate_hz) { timer_rate = rate_hz; return true; }
+bool sampling_timer_take(sampling_tick_t *tick)
+{
+    if (!tick_pending) return false;
+    *tick = pending_tick;
+    tick_pending = false;
+    return true;
+}
+void sampling_pulse_begin(void) { TEST_ASSERT_FALSE(pin_high); pin_high = true; ++pulse_starts; }
+void sampling_pulse_end(void) { TEST_ASSERT_TRUE(pin_high); pin_high = false; ++pulse_ends; }
+static void post_tick(void)
+{
+    pending_tick.sequence = ++sequence;
+    pending_tick.timestamp_us = clock_us;
+    tick_pending = true;
+}
 
 static int read_reg(void *ctx, uint8_t address, uint8_t reg, uint8_t *data, size_t length)
 {
     (void)ctx;
     if (address != 0x76 || length > 256u - reg) return -1;
-    if (reg == 0xf7) ++data_reads;
+    if (reg == 0xf7) {
+        ++data_reads;
+        if (fail_data) return -1;
+    }
     memcpy(data, registers + reg, length);
     return 0;
 }
@@ -69,18 +92,45 @@ static void boot_scan_reset_and_timed_sample(void)
     sensor_poll();
     TEST_ASSERT_EQUAL_UINT(4, writes);
     TEST_ASSERT_EQUAL_UINT(0x27, registers[0xf4]);
-    clock_us = 1000000;
+    TEST_ASSERT_EQUAL_UINT(PICOLOGGER_SAMPLE_RATE_HZ, timer_rate);
+    clock_us = 22000;
+    post_tick();
     sensor_poll();
-    TEST_ASSERT_EQUAL_UINT(0, data_reads);
+    TEST_ASSERT_EQUAL_UINT(1, data_reads);
+    TEST_ASSERT_EQUAL_UINT(1, pulse_starts);
+    TEST_ASSERT_EQUAL_UINT(1, pulse_ends);
     connected = true;
-    clock_us = 2000000;
-    sensor_poll();
-    TEST_ASSERT_EQUAL_UINT(1, data_reads);
-    sensor_poll();
-    TEST_ASSERT_EQUAL_UINT(1, data_reads);
-    clock_us = 3000000;
+    clock_us = 42000;
+    post_tick();
+    clock_us = 62000;
+    post_tick();
     sensor_poll();
     TEST_ASSERT_EQUAL_UINT(2, data_reads);
+    sensor_poll();
+    TEST_ASSERT_EQUAL_UINT(2, data_reads);
+    for (unsigned int i = 4; i <= 500; ++i) {
+        clock_us = 2000 + i * UINT64_C(20000);
+        post_tick();
+        sensor_poll();
+    }
+    TEST_ASSERT_EQUAL_UINT(499, data_reads);
+    TEST_ASSERT_EQUAL_UINT(data_reads, pulse_starts);
+    TEST_ASSERT_EQUAL_UINT(data_reads, pulse_ends);
+    TEST_ASSERT_FALSE(pin_high);
+    fail_data = true;
+    clock_us += 20000;
+    post_tick();
+    sensor_poll();
+    TEST_ASSERT_EQUAL_UINT(500, data_reads);
+    TEST_ASSERT_EQUAL_UINT(data_reads, pulse_starts);
+    TEST_ASSERT_EQUAL_UINT(data_reads, pulse_ends);
+    TEST_ASSERT_FALSE(pin_high);
+    clock_us = 11002000;
+    sensor_poll();
+    clock_us = 20002000;
+    sensor_poll();
+    clock_us = 30002000;
+    sensor_poll();
 }
 
 int main(void)

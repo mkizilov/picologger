@@ -80,3 +80,4 @@ reset. If LED initialization or timer registration fails, an additional
    that intentionally causes a watchdog reset; this firmware does not do so.
 5. If a Pico W is available, repeat with the Pico W-specific build and check its
    onboard CYW43 LED and CDC banner. No wireless network is configured.
+6. For timer sampling and GP15 logic-analyzer checks, follow `SAMPLING.md`.
