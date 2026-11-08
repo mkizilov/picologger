@@ -1,7 +1,8 @@
 # microSD logging
 
-The firmware logs the **BME280 sample-record stream** in the existing v1
-format described by `LOG_FORMAT.md`. ADC DMA blocks continue to be sampled and
+The firmware logs the **BME280 sample-record stream** in the v2 format
+described by `LOG_FORMAT.md`; v1 decoding and recovery remain supported.
+ADC DMA blocks continue to be sampled and
 reported, but are **not written to SD**: the v1 records do not define a
 mixed-rate ADC block format. Firmware has no persistent boot counter yet, so
 the header's boot counter is `0` (unknown), not a measured boot count. Header
@@ -27,13 +28,19 @@ lockout or another FIFO consumer concurrently. Interrupts, bus contention,
 serial printing and finite buffering can still cause sampling or ADC losses;
 no real-time guarantee has been measured.
 
-The writer creates the first unused `LOG_0001.BIN` … `LOG_9999.BIN` on each
-mount, including after a reboot or detected removal; `FA_CREATE_NEW` prevents
-overwriting an existing file. It accumulates the v1 header and records as a
-byte stream in a 512-byte-aligned buffer, submitting normal writes in 4096-byte
-chunks from sector-aligned file offsets. A record may straddle chunk boundaries.
-On rotation, a final shorter write preserves the v1 record boundary; it starts
-at a sector-aligned offset. The default rotation limit is 16 MiB. To change it:
+On each mount, the highest-numbered finalized `LOG_####.BIN` is opened and
+recovered before the first unused `LOG_0001.BIN` … `LOG_9999.BIN` is created.
+`FA_CREATE_NEW` prevents overwriting existing files. A new CRC-protected v2
+header occupies its own 512-byte sector: it is written and synced to a `.TMP`
+file, closed, renamed to `.BIN`, and reopened before data writes. Subsequent
+data writes start after that sector. Interrupted `.TMP` files are ignored and
+preserved, not automatically deleted or promoted.
+
+Records are accumulated in a 512-byte-aligned buffer and normally submitted in
+4096-byte chunks from sector-aligned offsets. The initial 512-byte header write
+and the final shorter rotation write are deliberate exceptions. Both v2 header
+and normal chunks end on record boundaries. The default rotation limit is
+16 MiB. To change it:
 
 ```sh
 cmake --preset firmware -DPICOLOGGER_LOG_ROTATE_BYTES=8192
@@ -42,17 +49,38 @@ cmake --build --preset firmware
 
 The configured integer must be between 8192 and 4294967295 bytes. A file's
 actual length is at most that limit, rounded down to a complete 32-byte record
-after its 60-byte header. If all 9999 names exist, logging goes offline and
-retries; it does not delete or reuse files.
+after its 512-byte header. Existing `.BIN` or `.TMP` names are skipped. If all
+9999 names exist, logging goes offline and retries; it does not reuse files.
 
 `f_sync` is attempted about every five seconds, and before rotation. It syncs
 bytes already submitted to FatFs, **not** the incomplete 4 KiB RAM chunk or
 records still in the core-0 ring/batches. At low sample rates a partial chunk
 can remain in RAM much longer than five seconds. There is currently no clean
 stop/eject command; powering down or removing a card can lose buffered data,
-leave an empty file or leave a partial trailing record. Use the decoder's
+leave a partial trailing record or an orphan `.TMP`. Use the decoder's
 truncation/CRC diagnostics and do not assume a recent sync means every sample
 is durable.
+
+## Recovery and limits
+
+On boot and after a detected remount, recovery validates the newest `.BIN`
+header, scans backward through record-aligned positions for the last valid
+record CRC, truncates the trailing partial or invalid records, and syncs the
+new length. A header-only file is valid. An invalid header or failed read is
+not truncated. If truncation or its sync fails, the new length may already have
+been applied; logging remains offline and retries. Older logs are not changed.
+Earlier corruption before the last valid
+record is not repaired, and CRC-16 collisions are possible. V1 headers have no
+CRC, so plausible corruption in them cannot always be detected.
+Scanning a long corrupt tail can take substantial time; finite acquisition
+buffers may fill and drop records while recovery runs on the storage core.
+
+This is best-effort recovery, **not a guarantee of survival at any instant**.
+FAT metadata and rename operations are not journaled or guaranteed atomic,
+storage devices can tear writes or misreport durability, and an unmountable
+filesystem cannot be repaired by this scanner. Records still in RAM or not
+synced may be lost; `.TMP` remnants may need manual inspection. See
+`POWER_LOSS.md` for the ten-cycle manual test.
 
 The storage core polls the card after sync, invalidates the mount on errors and
 retries roughly every three seconds. Without card-detect hardware, removal and
@@ -65,7 +93,7 @@ test has been performed.
 Every approximately ten seconds the console reports:
 
 ```text
-SD online=... dropped=... uncertain=... worst_write_us=... worst_sync_us=...
+SD online=... dropped=... uncertain=... worst_write_us=... worst_sync_us=... recovered_bytes=... recovery_errors=...
 ```
 
 Counters are cumulative since boot. `dropped` counts records rejected by the
@@ -83,6 +111,11 @@ includes mount, open, presence checks, close or an operation still blocked.
 Values are capped at 268435455 µs in inter-core telemetry and a `+` marks the
 cap. These latency fields are **unmeasured on hardware**. Use both alongside
 drop counters when sizing the ring; neither is a guarantee about future cards.
+`recovered_bytes` counts trailing bytes removed by fully successful recovery
+attempts, and `recovery_errors` counts failed attempts since this boot. If a
+truncate succeeds but a later sync/close fails, the byte count can omit it.
+Header write and sync times are
+included in the respective worst-latency fields; scan and rename are not.
 
 ## Manual checklist (not performed)
 

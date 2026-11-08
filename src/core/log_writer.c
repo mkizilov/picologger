@@ -18,12 +18,16 @@ static bool create_file(log_writer_t *writer)
     char name[20];
     while (writer->next_name <= 9999) {
         (void)snprintf(name, sizeof(name), "0:/LOG_%04u.BIN", writer->next_name++);
-        int result = writer->storage.create(writer->storage.context, name);
+        uint64_t write_us = 0, sync_us = 0;
+        int result = writer->storage.create(writer->storage.context, name, writer->header,
+                                            LOG_HEADER_V2_SIZE, &write_us, &sync_us);
+        if (write_us > writer->worst_write_us) writer->worst_write_us = write_us;
+        if (sync_us > writer->worst_sync_us) writer->worst_sync_us = sync_us;
         if (result == 1) continue;
         if (result != 0) return false;
-        memcpy(writer->chunk, writer->header, LOG_HEADER_SIZE);
-        writer->used = LOG_HEADER_SIZE;
-        writer->file_records = writer->synced_records = writer->written_bytes = 0;
+        writer->used = 0;
+        writer->file_records = writer->synced_records = 0;
+        writer->written_bytes = LOG_HEADER_V2_SIZE;
         return true;
     }
     return false;
@@ -49,8 +53,8 @@ static bool sync_file(log_writer_t *writer)
     uint64_t duration = writer->storage.now_us(writer->storage.context) - start;
     if (duration > writer->worst_sync_us) writer->worst_sync_us = duration;
     if (!ok) return false;
-    writer->synced_records = writer->written_bytes > LOG_HEADER_SIZE ?
-        (writer->written_bytes - LOG_HEADER_SIZE) / LOG_RECORD_SIZE : 0;
+    writer->synced_records = writer->written_bytes > LOG_HEADER_V2_SIZE ?
+        (writer->written_bytes - LOG_HEADER_V2_SIZE) / LOG_RECORD_SIZE : 0;
     writer->next_sync = writer->storage.now_us(writer->storage.context) + LOG_SYNC_US;
     return true;
 }
@@ -65,13 +69,13 @@ static bool rotate(log_writer_t *writer)
 bool log_writer_init(log_writer_t *writer, const log_storage_t *storage,
                      const log_header_t *header, uint32_t rotate_bytes)
 {
-    if (!writer || !storage || !header || !storage->mount || !storage->create || !storage->write ||
+    if (!writer || !storage || !header || !storage->mount || !storage->recover_newest || !storage->create || !storage->write ||
         !storage->sync || !storage->close || !storage->unmount || !storage->present || !storage->now_us ||
         rotate_bytes < LOG_WRITE_CHUNK * 2u) return false;
     memset(writer, 0, sizeof(*writer));
     writer->storage = *storage;
-    writer->record_limit = (rotate_bytes - LOG_HEADER_SIZE) / LOG_RECORD_SIZE;
-    return log_encode_header(writer->header, sizeof(writer->header), header) == LOG_OK;
+    writer->record_limit = (rotate_bytes - LOG_HEADER_V2_SIZE) / LOG_RECORD_SIZE;
+    return log_encode_header_v2(writer->header, sizeof(writer->header), header) == LOG_OK;
 }
 
 void log_writer_maintain(log_writer_t *writer)
@@ -80,6 +84,14 @@ void log_writer_maintain(log_writer_t *writer)
     if (!writer->online) {
         if (now < writer->next_retry) return;
         if (!writer->storage.mount(writer->storage.context)) { disconnect(writer); return; }
+        bool found = false;
+        log_recovery_result_t recovered = {0};
+        if (!writer->storage.recover_newest(writer->storage.context, &found, &recovered)) {
+            ++writer->recovery_errors;
+            disconnect(writer);
+            return;
+        }
+        if (found) writer->recovered_bytes += recovered.original_size - recovered.recovered_size;
         writer->next_name = 1;
         if (!create_file(writer)) { disconnect(writer); return; }
         writer->online = true;

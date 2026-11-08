@@ -6,6 +6,8 @@
 
 #define LOG_FORMAT_VERSION 1u
 #define LOG_HEADER_SIZE 60u
+#define LOG_FORMAT_VERSION_V2 2u
+#define LOG_HEADER_V2_SIZE 512u
 #define LOG_RECORD_SIZE 32u
 #define LOG_MAX_CHANNELS 4u
 #define LOG_FIRMWARE_SIZE 32u
@@ -35,6 +37,9 @@ typedef struct {
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xffff, no reflection or xorout. */
 uint16_t log_crc16(const uint8_t *data, size_t length);
 log_status_t log_encode_header(uint8_t *output, size_t length, const log_header_t *header);
+/* V2 reserves a whole sector and protects the header with CRC-16. */
+log_status_t log_encode_header_v2(uint8_t *output, size_t length, const log_header_t *header);
+/* Decodes either v1 (60 bytes) or v2 (512 bytes). */
 log_status_t log_decode_header(log_header_t *header, const uint8_t *input, size_t length);
 log_status_t log_encode_record(uint8_t *output, size_t length, const log_record_t *record);
 /* On a CRC or validation failure, the output object is unchanged. */

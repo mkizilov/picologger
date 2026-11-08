@@ -119,13 +119,24 @@ static bool fs_mount(void *ctx)
     while (atomic_load(&hold_mount)) wait_briefly();
     return atomic_load(&media);
 }
-static int fs_create(void *ctx, const char *name)
+static bool fs_recover(void *ctx, bool *found, log_recovery_result_t *result)
+{
+    (void)ctx; (void)result;
+    *found = false;
+    return true;
+}
+static int fs_create(void *ctx, const char *name, const uint8_t *header, size_t size,
+                     uint64_t *write_us, uint64_t *sync_us)
 {
     (void)ctx;
     unsigned int number;
     if (sscanf(name, "0:/LOG_%4u.BIN", &number) != 1 || number < 1 || number > 3) return -1;
     if (number <= atomic_load(&opened_files)) return 1;
     active_file = (int)number - 1;
+    if (size != LOG_HEADER_V2_SIZE) abort();
+    memcpy(files[active_file], header, size);
+    file_sizes[active_file] = size;
+    *write_us = *sync_us = 0;
     (void)atomic_fetch_add(&opened_files, 1);
     return 0;
 }
@@ -149,7 +160,7 @@ static bool fs_present(void *ctx) { (void)ctx; return atomic_load(&media); }
 static uint64_t fs_now(void *ctx) { (void)ctx; return time_us_64(); }
 log_storage_t sd_storage_interface(void)
 {
-    return (log_storage_t){NULL, fs_mount, fs_create, fs_write, fs_sync, fs_close, fs_unmount, fs_present, fs_now};
+    return (log_storage_t){NULL, fs_mount, fs_recover, fs_create, fs_write, fs_sync, fs_close, fs_unmount, fs_present, fs_now};
 }
 
 void setUp(void) {}
@@ -186,13 +197,13 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     for (unsigned int i = 0; i < 16; ++i) { logger_poll(); wait_briefly(); }
     TEST_ASSERT_EQUAL_INT(0, pthread_join(worker_thread, NULL));
     TEST_ASSERT_EQUAL_INT(0, pthread_key_delete(core_key));
-    TEST_ASSERT_EQUAL_UINT(8188, file_sizes[0]);
+    TEST_ASSERT_EQUAL_UINT(8192, file_sizes[0]);
     log_header_t header;
     TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, files[0], file_sizes[0]));
     TEST_ASSERT_EQUAL_STRING("test-version", header.firmware);
-    for (unsigned int i = 0; i < 254; ++i) {
+    for (unsigned int i = 0; i < 240; ++i) {
         log_record_t record;
-        TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_record(&record, files[0] + LOG_HEADER_SIZE + i * LOG_RECORD_SIZE,
+        TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_record(&record, files[0] + LOG_HEADER_V2_SIZE + i * LOG_RECORD_SIZE,
                                                        LOG_RECORD_SIZE));
         TEST_ASSERT_EQUAL_UINT32(i + 10, record.sequence);
     }

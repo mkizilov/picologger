@@ -73,13 +73,37 @@ log_status_t log_encode_header(uint8_t *output, size_t length, const log_header_
     return LOG_OK;
 }
 
+log_status_t log_encode_header_v2(uint8_t *output, size_t length, const log_header_t *header)
+{
+    if (output == NULL || header == NULL) return LOG_INVALID_FORMAT;
+    if (length < LOG_HEADER_V2_SIZE) return LOG_SHORT_BUFFER;
+    log_status_t result = log_encode_header(output, length, header);
+    if (result != LOG_OK) return result;
+    put_le(output + 4, LOG_FORMAT_VERSION_V2, 2);
+    put_le(output + 6, LOG_HEADER_V2_SIZE, 2);
+    memset(output + LOG_HEADER_SIZE, 0, LOG_HEADER_V2_SIZE - LOG_HEADER_SIZE);
+    put_le(output + LOG_HEADER_V2_SIZE - 2, log_crc16(output, LOG_HEADER_V2_SIZE - 2), 2);
+    return LOG_OK;
+}
+
 log_status_t log_decode_header(log_header_t *header, const uint8_t *input, size_t length)
 {
     if (header == NULL || input == NULL) return LOG_INVALID_FORMAT;
     if (length < LOG_HEADER_SIZE) return LOG_SHORT_BUFFER;
-    if (memcmp(input, "PLOG", 4) || get_le(input + 4, 2) != LOG_FORMAT_VERSION ||
-        get_le(input + 6, 2) != LOG_HEADER_SIZE || input[45] || input[46] || input[47]) {
+    uint64_t version = get_le(input + 4, 2);
+    uint64_t header_size = get_le(input + 6, 2);
+    if (memcmp(input, "PLOG", 4) ||
+        !((version == LOG_FORMAT_VERSION && header_size == LOG_HEADER_SIZE) ||
+          (version == LOG_FORMAT_VERSION_V2 && header_size == LOG_HEADER_V2_SIZE)) ||
+        input[45] || input[46] || input[47]) {
         return LOG_INVALID_FORMAT;
+    }
+    if (length < header_size) return LOG_SHORT_BUFFER;
+    if (version == LOG_FORMAT_VERSION_V2) {
+        if (get_le(input + LOG_HEADER_V2_SIZE - 2, 2) != log_crc16(input, LOG_HEADER_V2_SIZE - 2))
+            return LOG_CRC_MISMATCH;
+        for (size_t i = LOG_HEADER_SIZE; i < LOG_HEADER_V2_SIZE - 2; ++i)
+            if (input[i] != 0) return LOG_INVALID_FORMAT;
     }
     log_header_t decoded = {0};
     memcpy(decoded.firmware, input + 8, LOG_FIRMWARE_SIZE);

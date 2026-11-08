@@ -28,6 +28,8 @@ enum { BATCH_COUNT = 4 };
 #define MSG_WORST UINT32_C(0x30000000)
 #define MSG_ONLINE UINT32_C(0x40000000)
 #define MSG_SYNC UINT32_C(0x50000000)
+#define MSG_RECOVERED UINT32_C(0x60000000)
+#define MSG_RECOVERY_ERRORS UINT32_C(0x70000000)
 
 typedef struct {
     _Alignas(512) uint8_t bytes[LOG_WRITE_CHUNK];
@@ -41,6 +43,7 @@ _Alignas(8) static uint32_t storage_stack[2048];
 static unsigned int free_mask;
 static int active_batch = -1;
 static uint64_t batch_started, next_report, dropped, uncertain, worst_write_us, worst_sync_us;
+static uint64_t recovered_bytes, recovery_errors;
 static bool online;
 
 static void send_delta(uint32_t kind, uint64_t *sent, uint64_t total)
@@ -68,6 +71,7 @@ static void storage_worker(void)
     log_storage_t storage = sd_storage_interface();
     bool initialized = log_writer_init(&writer, &storage, &header, PICOLOGGER_LOG_ROTATE_BYTES);
     uint64_t sent_dropped = 0, sent_uncertain = 0, sent_worst = 0, sent_sync = 0;
+    uint64_t sent_recovered = 0, sent_recovery_errors = 0;
     bool last_online = false, status_sent = false;
     for (;;) {
         if (initialized) log_writer_maintain(&writer);
@@ -89,6 +93,8 @@ static void storage_worker(void)
         }
         send_delta(MSG_DROPPED, &sent_dropped, writer.dropped);
         send_delta(MSG_UNCERTAIN, &sent_uncertain, writer.uncertain);
+        send_delta(MSG_RECOVERED, &sent_recovered, writer.recovered_bytes);
+        send_delta(MSG_RECOVERY_ERRORS, &sent_recovery_errors, writer.recovery_errors);
         if (writer.worst_write_us > sent_worst) {
             sent_worst = writer.worst_write_us;
             uint32_t value = sent_worst > MSG_VALUE_MASK ? MSG_VALUE_MASK : (uint32_t)sent_worst;
@@ -130,6 +136,8 @@ void logger_poll(void)
             case MSG_UNCERTAIN: uncertain += value; break;
             case MSG_WORST: if (value > worst_write_us) worst_write_us = value; break;
             case MSG_SYNC: if (value > worst_sync_us) worst_sync_us = value; break;
+            case MSG_RECOVERED: recovered_bytes += value; break;
+            case MSG_RECOVERY_ERRORS: recovery_errors += value; break;
             case MSG_ONLINE: online = value != 0; break;
             default: break;
         }
@@ -166,10 +174,10 @@ void logger_poll(void)
     if (now >= next_report) {
         if (stdio_usb_connected()) {
             printf("SD online=%u dropped=%" PRIu64 " uncertain=%" PRIu64 " worst_write_us=%" PRIu64 "%s"
-                   " worst_sync_us=%" PRIu64 "%s\n",
+                   " worst_sync_us=%" PRIu64 "%s recovered_bytes=%" PRIu64 " recovery_errors=%" PRIu64 "\n",
                    online ? 1u : 0u, dropped, uncertain, worst_write_us,
                    worst_write_us == MSG_VALUE_MASK ? "+" : "", worst_sync_us,
-                   worst_sync_us == MSG_VALUE_MASK ? "+" : "");
+                   worst_sync_us == MSG_VALUE_MASK ? "+" : "", recovered_bytes, recovery_errors);
         }
         next_report = now + UINT64_C(10000000);
     }

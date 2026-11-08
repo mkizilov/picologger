@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode PicoLogger format-v1 files to CSV without third-party dependencies."""
+"""Decode PicoLogger v1/v2 files to CSV without third-party dependencies."""
 
 import argparse
 import csv
@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 HEADER_SIZE = 60
+HEADER_V2_SIZE = 512
 RECORD_SIZE = 32
 
 
@@ -21,11 +22,19 @@ def crc16(data):
 
 
 def read_header(data):
-    if len(data) != HEADER_SIZE:
+    if len(data) < HEADER_SIZE:
         raise ValueError("truncated file header")
     magic, version, size = struct.unpack_from("<4sHH", data)
-    if magic != b"PLOG" or version != 1 or size != HEADER_SIZE:
+    if magic != b"PLOG" or (version, size) not in ((1, HEADER_SIZE), (2, HEADER_V2_SIZE)):
         raise ValueError("unsupported magic, version or header size")
+    if len(data) != size:
+        raise ValueError("truncated file header")
+    if version == 2:
+        stored_crc, = struct.unpack_from("<H", data, HEADER_V2_SIZE - 2)
+        if crc16(data[:-2]) != stored_crc:
+            raise ValueError("header CRC failure")
+        if any(data[HEADER_SIZE:-2]):
+            raise ValueError("invalid header reserved bytes")
     firmware = data[8:40]
     end = firmware.find(b"\0")
     if end <= 0 or any(firmware[end + 1:]) or any(c < 32 or c > 126 for c in firmware[:end]):
@@ -44,7 +53,10 @@ def decode(input_path, output_path):
             output_path.exists() and input_path.samefile(output_path)):
         raise ValueError("input and output must be different files")
     with input_path.open("rb") as source:
-        firmware, rate, channels, boot = read_header(source.read(HEADER_SIZE))
+        data = source.read(HEADER_SIZE)
+        if len(data) == HEADER_SIZE and data[:8] == b"PLOG\x02\x00\x00\x02":
+            data += source.read(HEADER_V2_SIZE - HEADER_SIZE)
+        firmware, rate, channels, boot = read_header(data)
         print(f"firmware={firmware} sample_rate_hz={rate} boot_counter={boot} "
               f"channels={','.join(map(str, channels))}", file=sys.stderr)
         failures = gaps = records = 0

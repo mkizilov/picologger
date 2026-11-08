@@ -77,11 +77,30 @@ static void record_round_trip_and_corruption(void)
     TEST_ASSERT_EQUAL_INT(LOG_CRC_MISMATCH, log_decode_record(&out, bytes, sizeof(bytes)));
 }
 
+static void v2_header_crc_and_reserved_bytes(void)
+{
+    const log_header_t input = {.firmware = "v2-test", .sample_rate_hz = 50,
+                                .channel_count = 1, .channel_ids = {1}};
+    uint8_t bytes[LOG_HEADER_V2_SIZE];
+    log_header_t output;
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_encode_header_v2(bytes, sizeof(bytes), &input));
+    TEST_ASSERT_EQUAL_INT(LOG_SHORT_BUFFER, log_decode_header(&output, bytes, LOG_HEADER_SIZE));
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&output, bytes, sizeof(bytes)));
+    TEST_ASSERT_EQUAL_STRING(input.firmware, output.firmware);
+    bytes[100] ^= 1;
+    TEST_ASSERT_EQUAL_INT(LOG_CRC_MISMATCH, log_decode_header(&output, bytes, sizeof(bytes)));
+    uint16_t crc = log_crc16(bytes, LOG_HEADER_V2_SIZE - 2);
+    bytes[LOG_HEADER_V2_SIZE - 2] = (uint8_t)crc;
+    bytes[LOG_HEADER_V2_SIZE - 1] = (uint8_t)(crc >> 8);
+    TEST_ASSERT_EQUAL_INT(LOG_INVALID_FORMAT, log_decode_header(&output, bytes, sizeof(bytes)));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(crc_vectors);
     RUN_TEST(header_round_trip_and_validation);
     RUN_TEST(record_round_trip_and_corruption);
+    RUN_TEST(v2_header_crc_and_reserved_bytes);
     return UNITY_END();
 }

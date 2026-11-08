@@ -83,3 +83,4 @@ reset. If LED initialization or timer registration fails, an additional
 6. For timer sampling and GP15 logic-analyzer checks, follow `SAMPLING.md`.
 7. For GP26 ADC wiring and DMA integrity checks, follow `ADC_DMA.md`.
 8. For microSD wiring, logging and failure checks, follow `SD_LOGGING.md`.
+9. For ten power-loss trials and log recovery checks, follow `POWER_LOSS.md`.

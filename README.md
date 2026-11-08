@@ -18,6 +18,8 @@ The 10 kHz GP26 ADC/DMA path and its integrity checks are described in
 The binary log format and Python CSV decoder are described in
 [docs/LOG_FORMAT.md](docs/LOG_FORMAT.md); SD wiring, buffering and removal
 limitations are in [docs/SD_LOGGING.md](docs/SD_LOGGING.md).
+Best-effort power-loss recovery and its ten-cycle manual test are described in
+[docs/POWER_LOSS.md](docs/POWER_LOSS.md).
 
 ## Initial environment verification
 
@@ -45,3 +47,4 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 5. Follow [docs/SAMPLING.md](docs/SAMPLING.md) for the GP15 timing trace and interval-statistics checks.
 6. Follow [docs/ADC_DMA.md](docs/ADC_DMA.md) for safe analog input wiring and ADC/DMA checks.
 7. Follow [docs/SD_LOGGING.md](docs/SD_LOGGING.md) for SD wiring, rotation and removal checks.
+8. Follow [docs/POWER_LOSS.md](docs/POWER_LOSS.md) for ten manual power-loss trials.

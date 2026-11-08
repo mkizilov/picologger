@@ -9,8 +9,8 @@ typedef struct {
     size_t size[3];
     char names[3][20];
     int current, files;
-    bool media, fail_write, short_write, fail_sync, all_exist;
-    unsigned int mounts, syncs, closes, writes, unmounts;
+    bool media, fail_write, short_write, fail_sync, all_exist, fail_recovery, recovery_found;
+    unsigned int mounts, syncs, closes, writes, unmounts, recoveries;
     size_t write_lengths[8];
     uint64_t now, write_delay, sync_delay;
 } fake_fs_t;
@@ -20,7 +20,16 @@ static log_writer_t writer;
 static uint8_t records[LOG_RECORDS_PER_BATCH * LOG_RECORD_SIZE];
 
 static bool fs_mount(void *ctx) { fake_fs_t *f = ctx; ++f->mounts; return f->media; }
-static int fs_create(void *ctx, const char *name)
+static bool fs_recover(void *ctx, bool *found, log_recovery_result_t *result)
+{
+    fake_fs_t *f = ctx;
+    ++f->recoveries;
+    *found = f->recovery_found;
+    if (*found) *result = (log_recovery_result_t){1000, 993};
+    return !f->fail_recovery;
+}
+static int fs_create(void *ctx, const char *name, const uint8_t *header, size_t size,
+                     uint64_t *write_us, uint64_t *sync_us)
 {
     fake_fs_t *f = ctx;
     if (f->all_exist) return 1;
@@ -29,6 +38,12 @@ static int fs_create(void *ctx, const char *name)
     if (!f->media || f->files == 3) return -1;
     f->current = f->files++;
     (void)snprintf(f->names[f->current], sizeof(f->names[0]), "%s", name);
+    TEST_ASSERT_EQUAL_UINT(LOG_HEADER_V2_SIZE, size);
+    memcpy(f->data[f->current], header, size);
+    f->size[f->current] = size;
+    *write_us = f->write_delay;
+    *sync_us = f->sync_delay;
+    f->now += *write_us + *sync_us;
     return 0;
 }
 static bool fs_write(void *ctx, const uint8_t *data, size_t length, size_t *written)
@@ -59,7 +74,7 @@ void setUp(void)
     fs.sync_delay = 12000;
     const log_header_t header = {.firmware = "test", .sample_rate_hz = 50,
         .channel_count = 3, .channel_ids = {1, 2, 3}, .boot_counter = 0};
-    const log_storage_t ops = {&fs, fs_mount, fs_create, fs_write, fs_sync, fs_close, fs_unmount, fs_present, fs_now};
+    const log_storage_t ops = {&fs, fs_mount, fs_recover, fs_create, fs_write, fs_sync, fs_close, fs_unmount, fs_present, fs_now};
     TEST_ASSERT_TRUE(log_writer_init(&writer, &ops, &header, 8192));
     for (unsigned int i = 0; i < LOG_RECORDS_PER_BATCH; ++i) {
         log_record_t record = {.sequence = i, .timestamp_us = i * 20000u, .values = {(int32_t)i, 100000, 50, 0}};
@@ -79,8 +94,8 @@ static void aligned_chunks_rotate_without_overwriting(void)
     TEST_ASSERT_EQUAL_STRING("0:/LOG_0003.BIN", fs.names[1]);
     TEST_ASSERT_EQUAL_UINT(2, fs.writes);
     TEST_ASSERT_EQUAL_UINT(LOG_WRITE_CHUNK, fs.write_lengths[0]);
-    TEST_ASSERT_EQUAL_UINT(4092, fs.write_lengths[1]);
-    TEST_ASSERT_EQUAL_UINT(8188, fs.size[0]);
+    TEST_ASSERT_EQUAL_UINT(3584, fs.write_lengths[1]);
+    TEST_ASSERT_EQUAL_UINT(8192, fs.size[0]);
     TEST_ASSERT_EQUAL_UINT(1, fs.syncs);
     TEST_ASSERT_EQUAL_UINT(1, fs.closes);
     TEST_ASSERT_EQUAL_UINT64(37000, writer.worst_write_us);
@@ -88,9 +103,9 @@ static void aligned_chunks_rotate_without_overwriting(void)
     log_header_t header;
     TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, fs.data[0], fs.size[0]));
     TEST_ASSERT_EQUAL_UINT32(50, header.sample_rate_hz);
-    for (unsigned int i = 0; i < 254; ++i) {
+    for (unsigned int i = 0; i < 240; ++i) {
         log_record_t record;
-        TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_record(&record, fs.data[0] + LOG_HEADER_SIZE + i * LOG_RECORD_SIZE,
+        TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_record(&record, fs.data[0] + LOG_HEADER_V2_SIZE + i * LOG_RECORD_SIZE,
                                                        LOG_RECORD_SIZE));
         TEST_ASSERT_EQUAL_UINT32(i % 128, record.sequence);
     }
@@ -126,8 +141,8 @@ static void partial_write_is_uncertain_and_remaining_dropped(void)
     fs.short_write = true;
     log_writer_append(&writer, records, LOG_RECORDS_PER_BATCH);
     TEST_ASSERT_FALSE(writer.online);
-    TEST_ASSERT_EQUAL_UINT64(127, writer.uncertain);
-    TEST_ASSERT_EQUAL_UINT64(1, writer.dropped);
+    TEST_ASSERT_EQUAL_UINT64(128, writer.uncertain);
+    TEST_ASSERT_EQUAL_UINT64(0, writer.dropped);
     TEST_ASSERT_EQUAL_UINT64(37000, writer.worst_write_us);
     TEST_ASSERT_EQUAL_UINT(1, fs.unmounts);
 }
@@ -136,9 +151,10 @@ static void removal_counts_only_records_not_proven_synced(void)
 {
     log_writer_maintain(&writer);
     log_writer_append(&writer, records, LOG_RECORDS_PER_BATCH);
+    log_writer_append(&writer, records, 2);
     fs.now += LOG_SYNC_US;
     log_writer_maintain(&writer);
-    TEST_ASSERT_EQUAL_UINT(126, writer.synced_records);
+    TEST_ASSERT_EQUAL_UINT(128, writer.synced_records);
     fs.media = false;
     fs.now += LOG_PRESENCE_US;
     log_writer_maintain(&writer);
@@ -164,12 +180,12 @@ static void rotation_tail_failure_preserves_prior_sync_boundary(void)
     log_writer_append(&writer, records, LOG_RECORDS_PER_BATCH);
     fs.now += LOG_SYNC_US;
     log_writer_maintain(&writer);
-    TEST_ASSERT_EQUAL_UINT(126, writer.synced_records);
+    TEST_ASSERT_EQUAL_UINT(128, writer.synced_records);
     fs.short_write = true;
     log_writer_append(&writer, records, LOG_RECORDS_PER_BATCH);
     TEST_ASSERT_FALSE(writer.online);
-    TEST_ASSERT_EQUAL_UINT64(128, writer.uncertain);
-    TEST_ASSERT_EQUAL_UINT64(2, writer.dropped);
+    TEST_ASSERT_EQUAL_UINT64(112, writer.uncertain);
+    TEST_ASSERT_EQUAL_UINT64(16, writer.dropped);
 }
 
 static void exhausted_names_do_not_overwrite(void)
@@ -197,6 +213,28 @@ static void rejects_invalid_writer_configuration(void)
     TEST_ASSERT_FALSE(log_writer_init(&other, &writer.storage, &invalid, 8192));
 }
 
+static void recovery_failure_blocks_new_file_without_overwriting(void)
+{
+    fs.fail_recovery = true;
+    log_writer_maintain(&writer);
+    TEST_ASSERT_FALSE(writer.online);
+    TEST_ASSERT_EQUAL_UINT(1, fs.recoveries);
+    TEST_ASSERT_EQUAL_UINT(0, fs.files);
+    TEST_ASSERT_EQUAL_UINT64(1, writer.recovery_errors);
+    log_writer_append(&writer, records, 2);
+    TEST_ASSERT_EQUAL_UINT64(2, writer.dropped);
+}
+
+static void successful_recovery_precedes_new_file(void)
+{
+    fs.recovery_found = true;
+    log_writer_maintain(&writer);
+    TEST_ASSERT_TRUE(writer.online);
+    TEST_ASSERT_EQUAL_UINT(1, fs.recoveries);
+    TEST_ASSERT_EQUAL_UINT64(7, writer.recovered_bytes);
+    TEST_ASSERT_EQUAL_STRING("0:/LOG_0002.BIN", fs.names[0]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -208,5 +246,7 @@ int main(void)
     RUN_TEST(rotation_tail_failure_preserves_prior_sync_boundary);
     RUN_TEST(exhausted_names_do_not_overwrite);
     RUN_TEST(rejects_invalid_writer_configuration);
+    RUN_TEST(recovery_failure_blocks_new_file_without_overwriting);
+    RUN_TEST(successful_recovery_precedes_new_file);
     return UNITY_END();
 }

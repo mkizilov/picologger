@@ -62,6 +62,8 @@ static void batches_are_nonblocking_and_ownership_is_returned(void)
     incoming[in_write++] = UINT32_C(0x20000002);
     incoming[in_write++] = UINT32_C(0x30002ee0);
     incoming[in_write++] = UINT32_C(0x50001770);
+    incoming[in_write++] = UINT32_C(0x60000007);
+    incoming[in_write++] = UINT32_C(0x70000002);
     incoming[in_write++] = UINT32_C(0x40000001);
     incoming[in_write++] = 0;
     now = UINT64_C(10000000);
