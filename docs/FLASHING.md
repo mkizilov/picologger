@@ -88,3 +88,4 @@ reset. If LED initialization or timer registration fails, an additional
 12. For watchdog and fault-report checks, follow `WATCHDOG.md`.
 13. For dual-core jitter comparison, follow `DUAL_CORE.md`.
 14. For low-rate operation and current measurement, follow `POWER.md`.
+15. For host CLI and verified downloads, follow `HOST_TOOLS.md`.

@@ -12,6 +12,7 @@ case "$(uname -s)-$(uname -m)" in
 esac
 git submodule update --init --recursive
 python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 if [ -x .venv/bin/cmake ]; then
     PATH="$root/.venv/bin:$PATH"
     export PATH

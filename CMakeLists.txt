@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 option(PICOLOGGER_HOST "Build portable host tests instead of firmware" OFF)
+option(PICOLOGGER_SANITIZE "Enable address and undefined behavior sanitizers for host tests" OFF)
 if(NOT PICOLOGGER_HOST)
     include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 endif()
@@ -13,6 +14,10 @@ endif()
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+if(PICOLOGGER_HOST AND PICOLOGGER_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 set(PICOLOGGER_SAMPLE_RATE_HZ 50 CACHE STRING "BME280 timer sampling rate (1-50 Hz)")
 set(PICOLOGGER_LOG_ROTATE_BYTES 16777216 CACHE STRING "Maximum logical log file size in bytes")
 if(NOT PICOLOGGER_SAMPLE_RATE_HZ MATCHES "^[0-9]+$" OR

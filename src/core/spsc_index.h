@@ -1,9 +1,9 @@
 #ifndef PICOLOGGER_SPSC_INDEX_H
 #define PICOLOGGER_SPSC_INDEX_H
 
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 typedef _Atomic uint32_t spsc_index_t;
 bool spsc_index_init(spsc_index_t *index);

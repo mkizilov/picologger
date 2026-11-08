@@ -31,6 +31,8 @@ Dual-core ownership and the before/after jitter procedure are in
 [docs/DUAL_CORE.md](docs/DUAL_CORE.md).
 Low-rate power behavior and an unmeasured current table are in
 [docs/POWER.md](docs/POWER.md).
+The serial CLI, verified downloads, live plot and local checks are documented in
+[docs/HOST_TOOLS.md](docs/HOST_TOOLS.md).
 
 ## Local environment
 
@@ -57,3 +59,4 @@ manual flashing method. No physical board or power measurements were tested.
 11. Follow [docs/WATCHDOG.md](docs/WATCHDOG.md) for watchdog and HardFault checks.
 12. Follow [docs/DUAL_CORE.md](docs/DUAL_CORE.md) for dual-core and jitter comparison checks.
 13. Follow [docs/POWER.md](docs/POWER.md) for USB power-meter measurements and low-rate checks.
+14. Follow [docs/HOST_TOOLS.md](docs/HOST_TOOLS.md) for host CLI checks.

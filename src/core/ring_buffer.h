@@ -3,8 +3,8 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdatomic.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 typedef struct {
     unsigned char *storage;
