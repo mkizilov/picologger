@@ -5,7 +5,9 @@ C11 Raspberry Pi Pico firmware and native portable-code tests. Run
 for prerequisites, exact build commands and hardware pin assignments, and
 [DESIGN.md](DESIGN.md) for the planned architecture. The SDK is pinned to
 2.1.1; Unity 2.6.1 and the SDK's matching picotool are fetched at build time.
-The firmware currently implements only an LED heartbeat and USB startup message.
+The firmware currently implements a timer-driven LED heartbeat and a USB CDC
+boot banner. See [docs/FLASHING.md](docs/FLASHING.md) for build, flashing, serial
+console and manual verification instructions.
 
 ## Initial environment verification
 
@@ -26,6 +28,6 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 
 ## Manual hardware checklist (not performed)
 
-1. Build the firmware and flash `build/firmware/picologger.uf2` to a Pico/RP2040 using its BOOTSEL mode. Connect the Pico to a computer over USB; no external sensor, SD module or ADC input is needed for this scaffold.
-2. Expect the onboard LED to alternate approximately 500 ms on and 500 ms off. Connect a USB serial terminal and reset the board; `PicoLogger starting` may appear, although a terminal connecting after boot can miss it.
-3. For later hardware work, connect the BME280, microSD and timing/ADC pins as listed in `AGENTS.md`; they are not driven or tested by this scaffold. Verify supply voltage and module wiring before powering them.
+1. Build and flash `build/firmware/picologger.uf2` to the Pico using the guide. Connect USB; no sensor, SD module or ADC input is needed.
+2. Expect the onboard LED to alternate approximately 500 ms on and off. Open the USB serial console and expect version, board ID and reset reason lines; reconnect the console to see them again.
+3. For Pico W, separately build for `pico_w`, flash that UF2 and repeat the LED and serial checks. No physical board has been tested.

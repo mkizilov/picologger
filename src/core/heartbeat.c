@@ -4,3 +4,8 @@ bool heartbeat_led_on(uint32_t milliseconds)
 {
     return milliseconds % 1000u < 500u;
 }
+
+bool heartbeat_toggle(bool on)
+{
+    return !on;
+}

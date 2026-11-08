@@ -21,10 +21,22 @@ static void heartbeat_accepts_maximum_clock_value(void)
     TEST_ASSERT_TRUE(heartbeat_led_on(0));
 }
 
+static void heartbeat_toggles_on_every_timer_tick(void)
+{
+    bool state = false;
+    state = heartbeat_toggle(state);
+    TEST_ASSERT_TRUE(state);
+    state = heartbeat_toggle(state);
+    TEST_ASSERT_FALSE(state);
+    state = heartbeat_toggle(state);
+    TEST_ASSERT_TRUE(state);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(heartbeat_switches_at_half_second);
     RUN_TEST(heartbeat_accepts_maximum_clock_value);
+    RUN_TEST(heartbeat_toggles_on_every_timer_tick);
     return UNITY_END();
 }

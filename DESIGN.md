@@ -1,9 +1,12 @@
 # PicoLogger design
 
 The target is a Raspberry Pi Pico (RP2040), with no RTOS. The current firmware
-only blinks its onboard LED and emits a startup message over USB serial; it does
-not yet sample sensors or write storage. The first message can be missed when a
-terminal connects after boot.
+only blinks its onboard LED and emits a startup banner over USB serial; it does
+not yet sample sensors or write storage. A repeating hardware timer toggles the
+Pico LED every 500 ms. On Pico W the timer changes the desired state and the main
+loop applies it to CYW43, avoiding wireless-driver calls in interrupt context.
+The banner is sent on each USB CDC connection. RP2040 reset information can
+distinguish watchdog-related resets, but not reliably identify all other causes.
 
 ## Planned data path
 
@@ -20,5 +23,5 @@ Host tests compile core code only, independent of the SDK.
 
 ## Measurements
 
-Sampling rate, timing jitter, ring-buffer capacity, SD throughput and power
+Heartbeat timing/jitter, sampling rate, ring-buffer capacity, SD throughput and power
 consumption: **not measured**. No board has been confirmed attached.
