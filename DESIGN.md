@@ -12,9 +12,26 @@ distinguish watchdog-related resets, but not reliably identify all other causes.
 
 Timer- and DMA-driven sampling will place ADC samples into a bounded ring
 buffer. The main loop will drain completed data to the microSD card, keeping
-storage latency away from the sampling path. Overflow handling, buffer sizing,
-and recovery from card errors remain design work. The BME280 is an I2C sensor;
+storage latency away from the sampling path. `src/core/ring_buffer` supplies an
+SPSC fixed-record queue with caller-owned storage, power-of-two capacity, and
+release/acquire publication. A full queue rejects each new push and counts it
+modulo 2^32; retries count as further rejected attempts. Initialize it before
+enabling interrupts; it supports exactly one producer and one consumer, and
+storage and record arguments must not overlap. The atomic indices must be
+lock-free: initialization fails if the C implementation cannot guarantee that.
+In particular, lock-free behavior with the pinned RP2040 toolchain has not yet
+been verified, so do not use it in an ISR until it has been checked. The ring is
+not yet connected to sampling or storage. Buffer sizing and recovery from card
+errors remain design work. The BME280 is an I2C sensor;
 its slower measurements need scheduling separately from ADC DMA sampling.
+
+The available Apple Clang Cortex-M0 cross-target lowered 32-bit C11 atomic
+loads/stores to `__atomic_*` helper calls; that is not evidence about the pinned
+Arm GNU compiler. Before integrating the queue with RP2040 interrupts, check
+that the actual toolchain reports the ring's atomics lock-free and inspect its
+generated code for helper calls or interrupt masking. If it cannot meet that
+requirement, a separate target-specific design is needed rather than bypassing
+the initialization check.
 
 The USB serial command interface will configure and inspect logging without an
 RTOS. `src/core/` contains portable logic, `src/hal/` wraps Pico hardware,
