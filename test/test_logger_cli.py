@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".agent-local" / "matplotlib"))
 
-import logger_cli
+from tools import logger_cli
 
 
 class FakeSerial:
@@ -113,6 +113,8 @@ class LoggerCliTests(unittest.TestCase):
 
     def test_plot_rolls_and_stream_turns_off(self):
         sample = logger_cli.parse_sample("@CSV,7,2500000,2508,100653,67367")
+        if sample is None:
+            raise AssertionError("CSV sample was not parsed")
         self.assertEqual(sample[:3], (7, 2.5, 25.08))
         self.assertAlmostEqual(sample[3], 1006.53)
         with self.assertRaises(logger_cli.ProtocolError):
@@ -152,6 +154,8 @@ class LoggerCliTests(unittest.TestCase):
         with patch.object(logger_cli, "RollingPlot", FakeGraph):
             logger_cli.stream(logger_cli.Logger(port, 1), 2)
         self.assertEqual(port.commands, ["stream on", "stream off"])
+        if FakeGraph.instance is None:
+            raise AssertionError("plot was not created")
         self.assertEqual(FakeGraph.instance.samples, [sample])
 
     def test_main_uses_serial_and_returns_error_for_device_rejection(self):

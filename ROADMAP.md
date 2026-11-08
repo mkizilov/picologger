@@ -7,6 +7,12 @@ work precede optional product features. Physical tests below require an operator
 a suitable Pico/RP2040 setup and expendable media; agents must not access or
 flash hardware.
 
+The 2026-11-08 publication pass rechecked GitHub/PyPI access, pinned local
+setup, both firmware builds and the host test/analyzer suite. Initial dependency
+notices were preserved, but SDIO provenance and binary distribution terms remain
+unresolved; step 13 now covers that outstanding review rather than repeating the
+completed local checks. No HIL or performance result was obtained.
+
 Effort estimates include implementation, review, host tests and documentation,
 plus the stated supervised test preparation. They exclude hardware procurement,
 shipping, long unattended soak time and external certification. Estimates are
@@ -111,10 +117,10 @@ may overlap but the total is not reduced for concurrency.
 
 ## 13. Strengthen reproducible dependency and build verification
 
-- **Scope:** Audit pinned SDK, toolchain, Python, Unity, FatFs and picotool provenance and exercise clean project-local setup on supported hosts.
-- **Rationale:** Existing builds pass locally, but tool availability, package platforms and supply-chain/license review need repeatable evidence.
+- **Scope:** Resolve the documented SDIO/ZuluSCSI provenance question, audit remaining dependency/runtime terms and exercise clean project-local setup on supported hosts.
+- **Rationale:** The project MIT license and initial notices are in place, but both linked ELFs contain SDIO symbols and the upstream dependency's license/provenance needs independent review before binary distribution.
 - **Dependencies:** Independent clean environments and the repository's local-only boundaries.
-- **Acceptance:** Record exact versions and hashes, verify clean setup and both UF2 builds, and document unresolved platform or dependency issues without using global installs.
+- **Acceptance:** Resolve applicable SDIO and Pico W driver/firmware terms with appropriate review; record versions and hashes, verify clean setup and both UF2 builds, and document remaining issues without global installs.
 - **Effort:** 12 hours.
 
 ## 14. Measure and publish performance envelopes

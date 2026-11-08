@@ -114,8 +114,22 @@ uses guarded 48 MHz/WFI operation; Pico W falls back to normal clocks. See
 - **Unverified on hardware:** the HIL suite, USB/ADC/SD behavior, real-time
   performance, flash interruption, watchdog timing and current draw.
 
+The 2026-11-08 local pass confirmed GitHub and PyPI access, reran project-local
+setup, and passed `scripts/check.sh`: both firmware builds, 69 CTest cases with
+sanitized host binaries, clang-tidy, six CLI tests and seven HIL-helper tests.
+All six hardware cases were skipped. These are local build/simulation results,
+not physical measurements.
+
 See [verification evidence and limitations](docs/VERIFICATION.md) and the
 prioritized [roadmap](ROADMAP.md) for the remaining work and estimates.
+
+## License and third-party notices
+
+Project-owned code is licensed under the [MIT License](LICENSE), copyright
+2026 Mykyta Kizilov. Dependencies retain their own licenses and notices; see
+[third-party notices](THIRD_PARTY_NOTICES.md) and `LICENSES/`. The pinned SD
+dependency's SDIO provenance/terms require review before public publication or
+binary distribution; do not assume the complete dependency bundle is MIT-only.
 
 ## Performance — unmeasured
 
