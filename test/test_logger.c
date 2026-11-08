@@ -9,7 +9,7 @@
 static uint64_t now;
 static uint32_t incoming[16], outgoing[16];
 static unsigned int in_read, in_write, out_count, barrier_count, sample_count, sample_pos;
-static bool fifo_ready = true, launched;
+static bool fifo_ready = true, launched, channel_ok = true;
 
 void fake_memory_barrier(void) { ++barrier_count; }
 uint64_t time_us_64(void) { return now; }
@@ -24,6 +24,22 @@ void multicore_fifo_push_blocking(uint32_t value)
     TEST_ASSERT_TRUE(out_count < 16);
     outgoing[out_count++] = value;
 }
+bool logger_channel_init(void) { return channel_ok; }
+bool logger_channel_to_worker(uint32_t value)
+{
+    if (!fifo_ready) return false;
+    multicore_fifo_push_blocking(value);
+    return true;
+}
+bool logger_channel_from_worker(uint32_t *value)
+{
+    if (!multicore_fifo_rvalid()) return false;
+    *value = multicore_fifo_pop_blocking();
+    return true;
+}
+void logger_channel_to_main(uint32_t value) { (void)value; }
+bool logger_channel_from_main(uint32_t *value) { (void)value; return false; }
+bool flash_safe_execute_core_init(void) { return true; }
 void multicore_launch_core1_with_stack(void (*entry)(void), uint32_t *stack, size_t size)
 {
     TEST_ASSERT_NOT_NULL(entry);
@@ -96,18 +112,74 @@ static void batches_are_nonblocking_and_ownership_is_returned(void)
     logger_get_status(&status);
     TEST_ASSERT_EQUAL_INT(LOGGER_STOPPED, status.state);
     TEST_ASSERT_TRUE(status.control_ok);
+    incoming[in_write++] = UINT32_C(0xf0000001);
+    logger_poll();
+    TEST_ASSERT_TRUE(logger_flash_prepare());
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000003), outgoing[6]);
+    incoming[in_write++] = UINT32_C(0xf0000004);
+    logger_poll();
+    TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_READY, logger_flash_state());
+    TEST_ASSERT_TRUE(logger_flash_release());
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000006), outgoing[7]);
+    incoming[in_write++] = UINT32_C(0xf0000007);
+    logger_poll();
+    TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
+    TEST_ASSERT_TRUE(logger_flash_prepare());
+    TEST_ASSERT_TRUE(logger_flash_release());
+    TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
+    TEST_ASSERT_TRUE(logger_flash_prepare());
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000003), outgoing[8]);
+    TEST_ASSERT_TRUE(logger_flash_release());
+    TEST_ASSERT_FALSE(logger_request_list());
+    logger_poll();
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0xf0000006), outgoing[9]);
+    incoming[in_write++] = UINT32_C(0xf0000004);
+    incoming[in_write++] = UINT32_C(0xf0000007);
+    logger_poll();
+    TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
     TEST_ASSERT_TRUE(logger_request_start(25));
     logger_poll();
-    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0x90000019), outgoing[6]);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_C(0x90000019), outgoing[10]);
     incoming[in_write++] = UINT32_C(0x90000001);
     logger_poll();
     logger_get_status(&status);
     TEST_ASSERT_EQUAL_INT(LOGGER_RUNNING, status.state);
 }
 
-int main(void)
+static void missing_channel_fails_closed_without_hanging(void)
+{
+    channel_ok = false;
+    logger_start();
+    TEST_ASSERT_FALSE(launched);
+    TEST_ASSERT_FALSE(logger_request_list());
+    TEST_ASSERT_FALSE(logger_flash_prepare());
+    sample_count = 3;
+    logger_poll();
+    logger_status_t status;
+    logger_get_status(&status);
+    TEST_ASSERT_EQUAL_INT(LOGGER_STOPPED, status.state);
+    TEST_ASSERT_EQUAL_UINT64(3, status.dropped);
+}
+
+static void flash_without_lockout_initialization_is_rejected(void)
+{
+    logger_configure_boot(50, 8192, false);
+    logger_start();
+    incoming[in_write++] = UINT32_C(0xf0000002);
+    logger_poll();
+    TEST_ASSERT_FALSE(logger_flash_prepare());
+    TEST_ASSERT_EQUAL_INT(LOGGER_FLASH_IDLE, logger_flash_state());
+}
+
+int main(int argc, char **argv)
 {
     UNITY_BEGIN();
-    RUN_TEST(batches_are_nonblocking_and_ownership_is_returned);
+    if (argc == 2 && !strcmp(argv[1], "no_channel")) RUN_TEST(missing_channel_fails_closed_without_hanging);
+    else if (argc == 2 && !strcmp(argv[1], "no_flash")) RUN_TEST(flash_without_lockout_initialization_is_rejected);
+    else if (argc == 1) RUN_TEST(batches_are_nonblocking_and_ownership_is_returned);
+    else return 1;
     return UNITY_END();
 }

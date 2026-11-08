@@ -42,6 +42,8 @@ the initialization check.
 
 The USB serial command interface configures and inspects logging without an
 RTOS; see `docs/USB_COMMANDS.md` for bounded work and transport limits.
+Persistent settings use two separate erase sectors and SDK flash lockout; see
+`docs/SETTINGS.md` for the deliberate ADC interruption and remaining risks.
 `src/core/` contains portable logic, `src/hal/` wraps Pico hardware,
 `src/drivers/` contains device protocols, and `src/app/` assembles the system.
 Host tests compile core code only, independent of the SDK.

@@ -184,6 +184,7 @@ static void stop_during_initialization_remains_stopped(void)
     const int32_t calibration[] = {27504, 26435, -1000, 36477, -10685, 3024,
                                    2855, 140, -7, 15500, -14600, 6000};
     for (unsigned int i = 0; i < 12; ++i) set16((uint8_t)(0x88 + 2 * i), calibration[i]);
+    sensor_configure_boot(25, true, false);
     sensor_start();
     TEST_ASSERT_TRUE(sensor_set_running(false));
     clock_us = 2000;
@@ -198,10 +199,27 @@ static void stop_during_initialization_remains_stopped(void)
     TEST_ASSERT_EQUAL_UINT(25, timer_rate);
 }
 
+static void disabled_channel_never_starts_sensor(void)
+{
+    registers[0xd0] = 0x60;
+    sensor_configure_boot(25, false, true);
+    sensor_start();
+    clock_us = 2000;
+    sensor_poll();
+    sensor_status_t status;
+    sensor_get_status(&status);
+    TEST_ASSERT_FALSE(status.available);
+    TEST_ASSERT_FALSE(status.running);
+    TEST_ASSERT_EQUAL_UINT(0, timer_rate);
+    TEST_ASSERT_EQUAL_UINT(0, writes);
+    TEST_ASSERT_FALSE(sensor_set_running(true));
+}
+
 int main(int argc, char **argv)
 {
     UNITY_BEGIN();
     if (argc == 2 && !strcmp(argv[1], "early_stop")) RUN_TEST(stop_during_initialization_remains_stopped);
+    else if (argc == 2 && !strcmp(argv[1], "disabled")) RUN_TEST(disabled_channel_never_starts_sensor);
     else if (argc == 1) RUN_TEST(boot_scan_reset_and_timed_sample);
     else return 1;
     return UNITY_END();

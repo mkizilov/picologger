@@ -1,16 +1,18 @@
 #include "unity.h"
 #include "adc_app.h"
 #include "adc_capture.h"
+#include <string.h>
 
 static uint64_t now;
 static adc_block_t input[3];
 static unsigned int next_block;
+static unsigned int capture_starts;
 static bool overrun;
 static adc_capture_fault_t fault;
 
 uint64_t time_us_64(void) { return now; }
 bool stdio_usb_connected(void) { return true; }
-bool adc_capture_start(void) { return true; }
+bool adc_capture_start(void) { ++capture_starts; return true; }
 void adc_capture_check(void) {}
 bool adc_capture_take(adc_block_t *block)
 {
@@ -21,6 +23,8 @@ bool adc_capture_take(adc_block_t *block)
 adc_capture_fault_t adc_capture_fault(void) { return fault; }
 bool adc_capture_fifo_overrun(void) { return overrun; }
 bool adc_capture_fifo_underrun(void) { return false; }
+bool adc_capture_pause(bool *was_running) { *was_running = true; return true; }
+bool adc_capture_resume(void) { return true; }
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -43,9 +47,19 @@ static void reports_effective_rate_and_loss(void)
     adc_app_poll();
 }
 
-int main(void)
+static void disabled_adc_channel_does_not_start_capture(void)
+{
+    adc_app_configure_boot(false);
+    adc_app_start();
+    TEST_ASSERT_EQUAL_UINT(0, capture_starts);
+    adc_app_report_boot();
+}
+
+int main(int argc, char **argv)
 {
     UNITY_BEGIN();
-    RUN_TEST(reports_effective_rate_and_loss);
+    if (argc == 2 && !strcmp(argv[1], "disabled")) RUN_TEST(disabled_adc_channel_does_not_start_capture);
+    else if (argc == 1) RUN_TEST(reports_effective_rate_and_loss);
+    else return 1;
     return UNITY_END();
 }

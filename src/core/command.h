@@ -10,13 +10,18 @@
 
 typedef enum {
     COMMAND_STATUS, COMMAND_START, COMMAND_STOP, COMMAND_RATE, COMMAND_STREAM,
-    COMMAND_LS, COMMAND_DUMP, COMMAND_REBOOT, COMMAND_HELP, COMMAND_COUNT
+    COMMAND_LS, COMMAND_DUMP, COMMAND_REBOOT, COMMAND_HELP,
+    COMMAND_CONFIG_GET, COMMAND_CONFIG_SET, COMMAND_CONFIG_RESET, COMMAND_COUNT
 } command_kind_t;
+
+typedef enum { CONFIG_RATE, CONFIG_CHANNELS, CONFIG_ROTATE_BYTES, CONFIG_START_ON_BOOT } command_config_key_t;
 
 typedef struct {
     command_kind_t kind;
     uint32_t rate_hz;
     bool enabled;
+    command_config_key_t config_key;
+    uint32_t config_value;
     char filename[COMMAND_FILENAME_MAX + 1];
 } command_request_t;
 

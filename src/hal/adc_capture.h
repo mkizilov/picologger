@@ -11,5 +11,8 @@ bool adc_capture_take(adc_block_t *block);
 adc_capture_fault_t adc_capture_fault(void);
 bool adc_capture_fifo_overrun(void);
 bool adc_capture_fifo_underrun(void);
+/* Stop DMA/ADC before flash stalls XIP; preserve queued blocks and sequence. */
+bool adc_capture_pause(bool *was_running);
+bool adc_capture_resume(void);
 
 #endif

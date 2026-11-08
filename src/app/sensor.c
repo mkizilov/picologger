@@ -25,7 +25,7 @@ static bme280_result_t id_results[2];
 static bool id_checked[2];
 static bme280_t sensor;
 static bme280_result_t sensor_result = BME280_NO_DATA;
-static bool waiting_for_reset, ready, timer_failed, have_latest, running, desired_running = true;
+static bool waiting_for_reset, ready, timer_failed, have_latest, running, desired_running = true, channel_enabled = true;
 static uint64_t reset_time, next_read, stats_start, missed, read_errors;
 static interval_stats_t intervals;
 static uint32_t previous_sequence;
@@ -33,6 +33,13 @@ static uint32_t rate_hz = PICOLOGGER_SAMPLE_RATE_HZ, ring_high_water;
 static uint64_t total_samples, total_missed, total_read_errors;
 static ring_local_t samples;
 static log_record_t sample_storage[256], latest;
+
+void sensor_configure_boot(uint32_t rate, bool enabled, bool start)
+{
+    rate_hz = rate;
+    channel_enabled = enabled;
+    desired_running = enabled && start;
+}
 
 void sensor_start(void)
 {
@@ -43,6 +50,7 @@ void sensor_start(void)
         if (result > 0) found[address] = true;
         if (result < 0) ++scan_errors;
     }
+    if (!channel_enabled) { next_read = time_us_64() + 1000000; return; }
     sensor.bus = i2c_bus_interface();
     for (unsigned int i = 0; i < 2; ++i) {
         sensor.address = (uint8_t)(0x76 + i);
@@ -78,9 +86,10 @@ void sensor_report_boot(void)
             printf("BME280 ID read failed at 0x%02x\n", 0x76 + i);
     }
     if (waiting_for_reset || ready) printf("BME280 selected at 0x%02x\n", (unsigned int)sensor.address);
+    else if (!channel_enabled) puts("BME280 channel disabled by settings");
     else printf("BME280 unavailable (status %d)\n", (int)sensor_result);
     printf("Sampling rate=%u Hz, timer period=%u us\n",
-           (unsigned int)PICOLOGGER_SAMPLE_RATE_HZ, 1000000u / (unsigned int)PICOLOGGER_SAMPLE_RATE_HZ);
+           (unsigned int)rate_hz, 1000000u / (unsigned int)rate_hz);
     if (timer_failed) puts("Sampling timer initialization failed");
 }
 
@@ -189,6 +198,7 @@ void sensor_poll(void)
     if (now < next_read) return;
     next_read = now + 1000000;
     if (!stdio_usb_connected()) return;
+    if (!channel_enabled) return;
     if (timer_failed) { puts("Sampling timer initialization failed"); return; }
     if (ready && !running) { puts("BME280 sampling stopped"); return; }
     if (!have_latest || sensor_result != BME280_OK) {

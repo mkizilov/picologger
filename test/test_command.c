@@ -32,7 +32,9 @@ static void accepts_every_command_and_dispatches(void)
     static const struct { const char *text; command_kind_t kind; } cases[] = {
         {"status\n", COMMAND_STATUS}, {"start\n", COMMAND_START}, {"stop\n", COMMAND_STOP},
         {"rate 50\n", COMMAND_RATE}, {"stream on\n", COMMAND_STREAM}, {"ls\n", COMMAND_LS},
-        {"dump LOG_0001.BIN\n", COMMAND_DUMP}, {"reboot\n", COMMAND_REBOOT}, {"help\n", COMMAND_HELP}
+        {"dump LOG_0001.BIN\n", COMMAND_DUMP}, {"reboot\n", COMMAND_REBOOT}, {"help\n", COMMAND_HELP},
+        {"config get\n", COMMAND_CONFIG_GET}, {"config set rate 25\n", COMMAND_CONFIG_SET},
+        {"config reset\n", COMMAND_CONFIG_RESET}
     };
     command_dispatch_t dispatch = {0};
     for (unsigned int i = 0; i < COMMAND_COUNT; ++i) dispatch.handler[i] = handle;
@@ -43,7 +45,7 @@ static void accepts_every_command_and_dispatches(void)
         TEST_ASSERT_EQUAL_INT(cases[i].kind, last_kind);
     }
     TEST_ASSERT_EQUAL_UINT(COMMAND_COUNT, calls);
-    dispatch.handler[COMMAND_HELP] = NULL;
+    dispatch.handler[COMMAND_CONFIG_RESET] = NULL;
     TEST_ASSERT_FALSE(command_dispatch(&dispatch, &calls, &request));
     request.kind = COMMAND_COUNT;
     TEST_ASSERT_FALSE(command_dispatch(&dispatch, &calls, &request));
@@ -79,6 +81,20 @@ static void validates_rate_switch_file_and_argument_count(void)
     TEST_ASSERT_EQUAL_STRING("log-2.bin", request.filename);
     TEST_ASSERT_EQUAL_INT(COMMAND_READY, line("dump 12345678901234567890123456789012\n"));
     TEST_ASSERT_EQUAL_INT(COMMAND_BAD_ARGUMENT, line("dump 123456789012345678901234567890123\n"));
+    TEST_ASSERT_EQUAL_INT(COMMAND_READY, line("config set rotate_bytes 4294967295\n"));
+    TEST_ASSERT_EQUAL_INT(CONFIG_ROTATE_BYTES, request.config_key);
+    TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, request.config_value);
+    TEST_ASSERT_EQUAL_INT(COMMAND_READY, line("config set channels 3\n"));
+    TEST_ASSERT_EQUAL_INT(CONFIG_CHANNELS, request.config_key);
+    TEST_ASSERT_EQUAL_INT(COMMAND_READY, line("config set start_on_boot 0\n"));
+    TEST_ASSERT_EQUAL_INT(CONFIG_START_ON_BOOT, request.config_key);
+    TEST_ASSERT_EQUAL_INT(COMMAND_BAD_ARGUMENT, line("config set rate 51\n"));
+    TEST_ASSERT_EQUAL_INT(COMMAND_BAD_ARGUMENT, line("config set channels 4\n"));
+    TEST_ASSERT_EQUAL_INT(COMMAND_BAD_ARGUMENT, line("config set rotate_bytes 8191\n"));
+    TEST_ASSERT_EQUAL_INT(COMMAND_BAD_ARGUMENT, line("config set start_on_boot 2\n"));
+    TEST_ASSERT_EQUAL_INT(COMMAND_BAD_ARGUMENT, line("config set bad 1\n"));
+    TEST_ASSERT_EQUAL_INT(COMMAND_BAD_ARGUMENT, line("config set rate 4294967296\n"));
+    TEST_ASSERT_EQUAL_INT(COMMAND_BAD_ARGUMENT, line("config get extra\n"));
 }
 
 static void drains_overlong_and_invalid_input_then_recovers(void)

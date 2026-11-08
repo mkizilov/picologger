@@ -14,12 +14,13 @@ consecutive dots are rejected.
 | `help` | List commands. |
 | `status` | Uptime, BME280 successful samples/misses/errors, sampling rate, ring high-water mark, ADC delivered-sample count/fault, logging state, SD online state/current file, storage drops/uncertain records and output drops. |
 | `stop` | Stop BME280 timer sampling, drain already queued BME280 records, then flush, sync and close the current log on the storage core. Replies `PENDING stop`, followed by `OK stopped` or `ERR stop flush failed`. ADC DMA continues. |
-| `rate <hz>` | Set BME280 rate to 1–50 Hz while stopped. The value is runtime-only and resets to the build default at reboot. |
+| `rate <hz>` | Set BME280 rate to 1–50 Hz while stopped. The value is runtime-only and resets to the saved setting or build default at reboot. |
 | `start` | Open a new log with the selected rate in its header and restart BME280 sampling. Replies `PENDING start`, followed by `OK started` or an error. If SD is absent, sampling can start while storage retries and counts drops. |
 | `stream on` / `stream off` | Enable/disable live best-effort BME280 CSV frames. ADC samples are not streamed. |
 | `ls` | List root entries asynchronously as `FILE name size` or `DIR name size`, ending with `END LS`. Unsupported filenames are reported and skipped. |
 | `dump <file>` | Read a root file asynchronously in base64 chunks with a final CRC-32. Stop first to dump the current log; another completed file can be dumped while logging. |
 | `reboot` | Request a stop/flush, then schedule a watchdog reboot. After ten seconds it reboots even if storage has not acknowledged; unsynced data may be lost. |
+| `config get` / `config set <key> <value>` / `config reset` | Inspect or save settings for the next boot; real writes require stopped logging and intentionally pause ADC. See `SETTINGS.md`. |
 
 `stop` and `start` are asynchronous; wait for their final `OK`/`ERR` before
 issuing `rate` or another state transition. `status` reflects the most recently
@@ -69,7 +70,8 @@ and only standard-library modules.
 
 ## Nonblocking scope and limitations
 
-The acquisition core consumes at most 16 input bytes and one complete command
+Except for intentional flash-save pauses described in `SETTINGS.md`, the
+acquisition core consumes at most 16 input bytes and one complete command
 per poll, and sends at most one 64-byte output frame without waiting for USB
 space. The SDK's stdout/deadlock timeouts are set to zero so existing debug
 prints may be truncated rather than stall when the host stops reading. A short

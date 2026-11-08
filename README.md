@@ -22,6 +22,8 @@ Best-effort power-loss recovery and its ten-cycle manual test are described in
 [docs/POWER_LOSS.md](docs/POWER_LOSS.md).
 The USB CDC commands, live stream and checksummed dump are documented in
 [docs/USB_COMMANDS.md](docs/USB_COMMANDS.md).
+Persistent settings and flash safety are documented in
+[docs/SETTINGS.md](docs/SETTINGS.md).
 
 ## Initial environment verification
 
@@ -51,3 +53,4 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 7. Follow [docs/SD_LOGGING.md](docs/SD_LOGGING.md) for SD wiring, rotation and removal checks.
 8. Follow [docs/POWER_LOSS.md](docs/POWER_LOSS.md) for ten manual power-loss trials.
 9. Follow [docs/USB_COMMANDS.md](docs/USB_COMMANDS.md) for command, stream and dump checks.
+10. Follow [docs/SETTINGS.md](docs/SETTINGS.md) for configuration and flash checks.

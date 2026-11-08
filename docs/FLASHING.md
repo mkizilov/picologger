@@ -85,3 +85,4 @@ reset. If LED initialization or timer registration fails, an additional
 8. For microSD wiring, logging and failure checks, follow `SD_LOGGING.md`.
 9. For ten power-loss trials and log recovery checks, follow `POWER_LOSS.md`.
 10. For USB commands and checksummed file transfer, follow `USB_COMMANDS.md`.
+11. For persistent settings and flash safety, follow `SETTINGS.md`.

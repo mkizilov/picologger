@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-typedef enum { ARG_NONE, ARG_RATE, ARG_SWITCH, ARG_FILE } argument_t;
+typedef enum { ARG_NONE, ARG_RATE, ARG_SWITCH, ARG_FILE, ARG_CONFIG } argument_t;
 typedef struct { const char *name; command_kind_t kind; argument_t argument; } command_entry_t;
 
 static const command_entry_t commands[] = {
@@ -10,7 +10,7 @@ static const command_entry_t commands[] = {
     {"stop", COMMAND_STOP, ARG_NONE}, {"rate", COMMAND_RATE, ARG_RATE},
     {"stream", COMMAND_STREAM, ARG_SWITCH}, {"ls", COMMAND_LS, ARG_NONE},
     {"dump", COMMAND_DUMP, ARG_FILE}, {"reboot", COMMAND_REBOOT, ARG_NONE},
-    {"help", COMMAND_HELP, ARG_NONE}
+    {"help", COMMAND_HELP, ARG_NONE}, {"config", COMMAND_CONFIG_GET, ARG_CONFIG}
 };
 
 void command_parser_init(command_parser_t *parser) { memset(parser, 0, sizeof(*parser)); }
@@ -31,44 +31,67 @@ bool command_filename_valid(const char *name)
     return true;
 }
 
+static bool number(const char *text, uint32_t *out)
+{
+    if (!*text) return false;
+    uint32_t value = 0;
+    for (const char *p = text; *p; ++p) {
+        if (*p < '0' || *p > '9') return false;
+        uint32_t digit = (uint32_t)(*p - '0');
+        if (value > (UINT32_MAX - digit) / 10u) return false;
+        value = value * 10u + digit;
+    }
+    *out = value;
+    return true;
+}
+
 static command_parse_result_t parse_line(char *line, command_request_t *request)
 {
-    while (whitespace(*line)) ++line;
-    if (!*line) return COMMAND_MORE;
-    char *name = line;
-    while (*line && !whitespace(*line)) ++line;
-    if (*line) *line++ = '\0';
-    while (whitespace(*line)) ++line;
-    char *argument = line;
-    while (*line && !whitespace(*line)) ++line;
-    if (*line) *line++ = '\0';
-    while (whitespace(*line)) ++line;
-    if (*line) return COMMAND_BAD_ARGUMENT;
+    char *tokens[4];
+    size_t count = 0;
+    while (*line) {
+        while (whitespace(*line)) ++line;
+        if (!*line) break;
+        if (count == 4) return COMMAND_BAD_ARGUMENT;
+        tokens[count++] = line;
+        while (*line && !whitespace(*line)) ++line;
+        if (*line) *line++ = '\0';
+    }
+    if (!count) return COMMAND_MORE;
     const command_entry_t *entry = NULL;
     for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i) {
-        if (!strcmp(name, commands[i].name)) { entry = &commands[i]; break; }
+        if (!strcmp(tokens[0], commands[i].name)) { entry = &commands[i]; break; }
     }
     if (!entry) return COMMAND_UNKNOWN;
     command_request_t parsed = {.kind = entry->kind};
-    if (entry->argument == ARG_NONE) {
-        if (*argument) return COMMAND_BAD_ARGUMENT;
-    } else if (!*argument) return COMMAND_BAD_ARGUMENT;
+    if (entry->argument == ARG_CONFIG) {
+        if (count == 2 && !strcmp(tokens[1], "get")) parsed.kind = COMMAND_CONFIG_GET;
+        else if (count == 2 && !strcmp(tokens[1], "reset")) parsed.kind = COMMAND_CONFIG_RESET;
+        else if (count == 4 && !strcmp(tokens[1], "set")) {
+            parsed.kind = COMMAND_CONFIG_SET;
+            if (!strcmp(tokens[2], "rate")) parsed.config_key = CONFIG_RATE;
+            else if (!strcmp(tokens[2], "channels")) parsed.config_key = CONFIG_CHANNELS;
+            else if (!strcmp(tokens[2], "rotate_bytes")) parsed.config_key = CONFIG_ROTATE_BYTES;
+            else if (!strcmp(tokens[2], "start_on_boot")) parsed.config_key = CONFIG_START_ON_BOOT;
+            else return COMMAND_BAD_ARGUMENT;
+            if (!number(tokens[3], &parsed.config_value) ||
+                (parsed.config_key == CONFIG_RATE && (parsed.config_value < 1 || parsed.config_value > 50)) ||
+                (parsed.config_key == CONFIG_CHANNELS && parsed.config_value > 3) ||
+                (parsed.config_key == CONFIG_ROTATE_BYTES && parsed.config_value < 8192) ||
+                (parsed.config_key == CONFIG_START_ON_BOOT && parsed.config_value > 1)) return COMMAND_BAD_ARGUMENT;
+        } else return COMMAND_BAD_ARGUMENT;
+    } else if (entry->argument == ARG_NONE) {
+        if (count != 1) return COMMAND_BAD_ARGUMENT;
+    } else if (count != 2) return COMMAND_BAD_ARGUMENT;
     else if (entry->argument == ARG_RATE) {
-        uint32_t value = 0;
-        for (const char *p = argument; *p; ++p) {
-            if (*p < '0' || *p > '9') return COMMAND_BAD_ARGUMENT;
-            uint32_t digit = (uint32_t)(*p - '0');
-            if (value > (UINT32_MAX - digit) / 10u) return COMMAND_BAD_ARGUMENT;
-            value = value * 10u + digit;
-        }
-        if (value < 1 || value > 50) return COMMAND_BAD_ARGUMENT;
-        parsed.rate_hz = value;
+        if (!number(tokens[1], &parsed.rate_hz) || parsed.rate_hz < 1 || parsed.rate_hz > 50)
+            return COMMAND_BAD_ARGUMENT;
     } else if (entry->argument == ARG_SWITCH) {
-        if (!strcmp(argument, "on")) parsed.enabled = true;
-        else if (strcmp(argument, "off")) return COMMAND_BAD_ARGUMENT;
+        if (!strcmp(tokens[1], "on")) parsed.enabled = true;
+        else if (strcmp(tokens[1], "off")) return COMMAND_BAD_ARGUMENT;
     } else {
-        if (!command_filename_valid(argument)) return COMMAND_BAD_ARGUMENT;
-        memcpy(parsed.filename, argument, strlen(argument) + 1);
+        if (!command_filename_valid(tokens[1])) return COMMAND_BAD_ARGUMENT;
+        memcpy(parsed.filename, tokens[1], strlen(tokens[1]) + 1);
     }
     *request = parsed;
     return COMMAND_READY;

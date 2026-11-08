@@ -7,10 +7,12 @@
 #include "firmware_version.h"
 #include "command_io.h"
 #include "log_writer.h"
+#include "logger_channel.h"
 #include "sd_storage.h"
 #include "sensor.h"
 #include "hardware/sync.h"
 #include "pico/multicore.h"
+#include "pico/flash.h"
 #include "pico/stdlib.h"
 #include "pico/stdio_usb.h"
 
@@ -39,13 +41,15 @@ enum { BATCH_COUNT = 4 };
 #define MSG_IO_ACK UINT32_C(0xc0000000)
 #define MSG_IO_REPLY UINT32_C(0xd0000000)
 #define MSG_IO_CANCEL UINT32_C(0xe0000000)
+#define MSG_FLASH UINT32_C(0xf0000000)
+enum { FLASH_INIT_OK = 1, FLASH_INIT_FAILED, FLASH_PREPARE, FLASH_READY, FLASH_REJECTED, FLASH_RESUME, FLASH_RELEASED };
 
 typedef struct {
     _Alignas(512) uint8_t bytes[LOG_WRITE_CHUNK];
     uint32_t count;
 } log_batch_t;
 
-/* FIFO transfers ownership. Only the owning core may access a batch. */
+/* Queue messages transfer ownership. Only the owning core may access a batch. */
 static log_batch_t batches[BATCH_COUNT];
 static log_writer_t writer;
 _Alignas(8) static uint32_t storage_stack[2048];
@@ -54,9 +58,13 @@ static int active_batch = -1;
 static uint64_t batch_started, next_report, dropped, uncertain, worst_write_us, worst_sync_us;
 static uint64_t recovered_bytes, recovery_errors;
 static bool online, control_ok = true;
+static bool channel_available, flash_supported, flash_control_sent;
+static logger_flash_state_t flash_state = LOGGER_FLASH_IDLE;
 static logger_state_t state = LOGGER_RUNNING;
 static bool control_sent;
 static uint32_t start_rate, current_file;
+static uint32_t boot_rate = PICOLOGGER_SAMPLE_RATE_HZ, boot_rotate = PICOLOGGER_LOG_ROTATE_BYTES;
+static bool boot_logging = true;
 
 typedef struct { uint32_t kind; char name[COMMAND_FILENAME_MAX + 1]; } io_request_t;
 typedef struct { char line[64]; bool final; } io_reply_t;
@@ -158,7 +166,7 @@ static void worker_io_step(worker_io_t *io, bool media_online)
     io_reply.final = io->final;
     io->waiting = true;
     __dmb();
-    multicore_fifo_push_blocking(MSG_IO_REPLY);
+    logger_channel_to_main(MSG_IO_REPLY);
 }
 
 static void send_delta(uint32_t kind, uint64_t *sent, uint64_t total)
@@ -166,14 +174,16 @@ static void send_delta(uint32_t kind, uint64_t *sent, uint64_t total)
     while (*sent < total) {
         uint64_t remaining = total - *sent;
         uint32_t part = remaining > MSG_VALUE_MASK ? MSG_VALUE_MASK : (uint32_t)remaining;
-        multicore_fifo_push_blocking(kind | part);
+        logger_channel_to_main(kind | part);
         *sent += part;
     }
 }
 
 static void storage_worker(void)
 {
-    log_header_t header = {.sample_rate_hz = PICOLOGGER_SAMPLE_RATE_HZ, .channel_count = 3,
+    bool lockout_ready = flash_safe_execute_core_init();
+    logger_channel_to_main(MSG_FLASH | (lockout_ready ? FLASH_INIT_OK : FLASH_INIT_FAILED));
+    log_header_t header = {.sample_rate_hz = boot_rate, .channel_count = 3,
                            .channel_ids = {1, 2, 3}, .boot_counter = 0};
     const char *version = PICOLOGGER_VERSION;
     unsigned int i = 0;
@@ -184,36 +194,38 @@ static void storage_worker(void)
     }
     if (!i) { header.firmware[0] = '?'; }
     log_storage_t storage = sd_storage_interface();
-    bool initialized = log_writer_init(&writer, &storage, &header, PICOLOGGER_LOG_ROTATE_BYTES);
+    bool initialized = log_writer_init(&writer, &storage, &header, boot_rotate);
+    if (initialized) writer.enabled = boot_logging;
     uint64_t sent_dropped = 0, sent_uncertain = 0, sent_worst = 0, sent_sync = 0;
     uint64_t sent_recovered = 0, sent_recovery_errors = 0;
     bool last_online = false, status_sent = false;
     unsigned int last_file = 0;
     worker_io_t io = {0};
+    bool flash_quiesced = false;
     for (;;) {
-        if (initialized) log_writer_maintain(&writer);
+        if (initialized && !flash_quiesced) log_writer_maintain(&writer);
         bool current_online = initialized && writer.online;
         if (!status_sent || current_online != last_online) {
-            multicore_fifo_push_blocking(MSG_ONLINE | (current_online ? 1u : 0u));
+            logger_channel_to_main(MSG_ONLINE | (current_online ? 1u : 0u));
             last_online = current_online;
             status_sent = true;
         }
-        if (multicore_fifo_rvalid()) {
-            uint32_t index = multicore_fifo_pop_blocking();
+        uint32_t index;
+        if (logger_channel_from_main(&index)) {
             __dmb();
             if (index < BATCH_COUNT) {
-                if (initialized) log_writer_append(&writer, batches[index].bytes, batches[index].count);
+                if (initialized && !flash_quiesced) log_writer_append(&writer, batches[index].bytes, batches[index].count);
                 else writer.dropped += batches[index].count;
                 __dmb();
-                multicore_fifo_push_blocking(MSG_FREE | index);
+                logger_channel_to_main(MSG_FREE | index);
             } else if (index == MSG_STOP) {
                 bool ok = initialized && log_writer_pause(&writer);
-                multicore_fifo_push_blocking(MSG_STOP | (ok ? 1u : 0u));
+                logger_channel_to_main(MSG_STOP | (ok ? 1u : 0u));
             } else if ((index & MSG_KIND_MASK) == MSG_START) {
-                bool ok = initialized && log_writer_resume(&writer, index & MSG_VALUE_MASK);
-                multicore_fifo_push_blocking(MSG_START | (ok ? 1u : 0u));
+                bool ok = initialized && !flash_quiesced && log_writer_resume(&writer, index & MSG_VALUE_MASK);
+                logger_channel_to_main(MSG_START | (ok ? 1u : 0u));
             } else if (index == MSG_IO_REQUEST) {
-                if (!io.kind) worker_io_begin(&io, &writer);
+                if (!io.kind && !flash_quiesced) worker_io_begin(&io, &writer);
             } else if (index == MSG_IO_ACK) {
                 if (io.waiting) {
                     if (io.final) worker_io_close(&io);
@@ -221,13 +233,21 @@ static void storage_worker(void)
                 }
             } else if (index == MSG_IO_CANCEL) {
                 worker_io_close(&io);
-                multicore_fifo_push_blocking(MSG_IO_CANCEL);
+                logger_channel_to_main(MSG_IO_CANCEL);
+            } else if (index == (MSG_FLASH | FLASH_PREPARE)) {
+                if (lockout_ready && initialized && !writer.enabled && !writer.file_open && !io.kind) {
+                    flash_quiesced = true;
+                    logger_channel_to_main(MSG_FLASH | FLASH_READY);
+                } else logger_channel_to_main(MSG_FLASH | FLASH_REJECTED);
+            } else if (index == (MSG_FLASH | FLASH_RESUME)) {
+                flash_quiesced = false;
+                logger_channel_to_main(MSG_FLASH | FLASH_RELEASED);
             }
         }
-        worker_io_step(&io, initialized && writer.online);
+        if (!flash_quiesced) worker_io_step(&io, initialized && writer.online);
         unsigned int file_number = initialized ? writer.current_number : 0;
         if (file_number != last_file) {
-            multicore_fifo_push_blocking(MSG_FILE | file_number);
+            logger_channel_to_main(MSG_FILE | file_number);
             last_file = file_number;
         }
         send_delta(MSG_DROPPED, &sent_dropped, writer.dropped);
@@ -237,12 +257,12 @@ static void storage_worker(void)
         if (writer.worst_write_us > sent_worst) {
             sent_worst = writer.worst_write_us;
             uint32_t value = sent_worst > MSG_VALUE_MASK ? MSG_VALUE_MASK : (uint32_t)sent_worst;
-            multicore_fifo_push_blocking(MSG_WORST | value);
+            logger_channel_to_main(MSG_WORST | value);
         }
         if (writer.worst_sync_us > sent_sync) {
             sent_sync = writer.worst_sync_us;
             uint32_t value = sent_sync > MSG_VALUE_MASK ? MSG_VALUE_MASK : (uint32_t)sent_sync;
-            multicore_fifo_push_blocking(MSG_SYNC | value);
+            logger_channel_to_main(MSG_SYNC | value);
         }
         sleep_ms(1);
     }
@@ -250,9 +270,20 @@ static void storage_worker(void)
 
 void logger_start(void)
 {
+    state = boot_logging ? LOGGER_RUNNING : LOGGER_STOPPED;
     free_mask = (1u << BATCH_COUNT) - 1u;
     next_report = time_us_64() + UINT64_C(10000000);
+    channel_available = logger_channel_init();
+    if (!channel_available) { state = LOGGER_STOPPED; return; }
+    __dmb();
     multicore_launch_core1_with_stack(storage_worker, storage_stack, sizeof(storage_stack));
+}
+
+void logger_configure_boot(uint32_t rate_hz, uint32_t rotate_bytes, bool start)
+{
+    boot_rate = rate_hz;
+    boot_rotate = rotate_bytes;
+    boot_logging = start;
 }
 
 void logger_note_drop(uint32_t count) { dropped += count; }
@@ -260,7 +291,7 @@ void logger_note_drop(uint32_t count) { dropped += count; }
 bool logger_request_stop(void)
 {
     if (state == LOGGER_STOPPED) return true;
-    if (state != LOGGER_RUNNING) return false;
+    if (!channel_available || state != LOGGER_RUNNING || flash_state != LOGGER_FLASH_IDLE) return false;
     state = LOGGER_STOPPING;
     control_sent = false;
     return true;
@@ -268,7 +299,7 @@ bool logger_request_stop(void)
 
 bool logger_request_start(uint32_t rate_hz)
 {
-    if (state != LOGGER_STOPPED || rate_hz < 1 || rate_hz > 50) return false;
+    if (!channel_available || flash_state != LOGGER_FLASH_IDLE || state != LOGGER_STOPPED || rate_hz < 1 || rate_hz > 50) return false;
     start_rate = rate_hz;
     state = LOGGER_STARTING;
     control_sent = false;
@@ -280,7 +311,31 @@ void logger_get_status(logger_status_t *status)
     *status = (logger_status_t){state, online, control_ok, current_file, dropped, uncertain};
 }
 
-bool logger_io_busy(void) { return io_busy || io_ack_pending || io_cancel_pending; }
+bool logger_io_busy(void) { return !channel_available || io_busy || io_ack_pending || io_cancel_pending || flash_state != LOGGER_FLASH_IDLE; }
+
+logger_flash_state_t logger_flash_state(void) { return flash_state; }
+
+bool logger_flash_prepare(void)
+{
+    if (!channel_available || !flash_supported || state != LOGGER_STOPPED || logger_io_busy()) return false;
+    flash_state = LOGGER_FLASH_REQUESTING;
+    flash_control_sent = false;
+    return true;
+}
+
+bool logger_flash_release(void)
+{
+    if (flash_state == LOGGER_FLASH_IDLE) return true;
+    if (flash_state == LOGGER_FLASH_REQUESTING && !flash_control_sent) {
+        flash_state = LOGGER_FLASH_IDLE;
+        return true;
+    }
+    if (flash_state != LOGGER_FLASH_REQUESTING && flash_state != LOGGER_FLASH_READY && flash_state != LOGGER_FLASH_FAILED)
+        return false;
+    flash_state = LOGGER_FLASH_RELEASING;
+    flash_control_sent = false;
+    return true;
+}
 
 bool logger_request_list(void)
 {
@@ -324,13 +379,19 @@ void logger_cancel_io(void)
 void logger_report_boot(void)
 {
     printf("SD logging: BME280 records, rotate=%" PRIu32 " bytes, SPI1 GP10/11/12 CS13\n",
-           (uint32_t)PICOLOGGER_LOG_ROTATE_BYTES);
+           boot_rotate);
+    if (!channel_available) puts("Storage communication initialization failed");
 }
 
 void logger_poll(void)
 {
-    for (unsigned int n = 0; n < 8 && multicore_fifo_rvalid(); ++n) {
-        uint32_t message = multicore_fifo_pop_blocking();
+    if (!channel_available) {
+        log_record_t discarded;
+        for (unsigned int n = 0; n < 8 && sensor_take_sample(&discarded); ++n) ++dropped;
+        return;
+    }
+    uint32_t message;
+    for (unsigned int n = 0; n < 8 && logger_channel_from_worker(&message); ++n) {
         __dmb();
         uint32_t value = message & MSG_VALUE_MASK;
         switch (message & MSG_KIND_MASK) {
@@ -350,21 +411,25 @@ void logger_poll(void)
                 else io_ack_pending = true;
                 break;
             case MSG_IO_CANCEL: io_busy = io_cancelling = false; break;
+            case MSG_FLASH:
+                if (value == FLASH_INIT_OK) flash_supported = true;
+                else if (value == FLASH_INIT_FAILED) flash_supported = false;
+                else if (value == FLASH_READY && flash_state == LOGGER_FLASH_REQUESTING) flash_state = LOGGER_FLASH_READY;
+                else if (value == FLASH_REJECTED && flash_state == LOGGER_FLASH_REQUESTING) flash_state = LOGGER_FLASH_FAILED;
+                else if (value == FLASH_RELEASED && flash_state == LOGGER_FLASH_RELEASING) flash_state = LOGGER_FLASH_IDLE;
+                break;
             default: break;
         }
     }
-    if (io_ack_pending && multicore_fifo_wready()) {
-        multicore_fifo_push_blocking(MSG_IO_ACK);
+    if (io_ack_pending && logger_channel_to_worker(MSG_IO_ACK)) {
         io_ack_pending = false;
     }
-    if (io_cancel_pending && multicore_fifo_wready()) {
-        multicore_fifo_push_blocking(MSG_IO_CANCEL);
+    if (io_cancel_pending && logger_channel_to_worker(MSG_IO_CANCEL)) {
         io_cancel_pending = false;
     }
-    if (io_request_pending && !io_ack_pending && !io_cancel_pending && multicore_fifo_wready()) {
+    if (io_request_pending && !io_ack_pending && !io_cancel_pending) {
         __dmb();
-        multicore_fifo_push_blocking(MSG_IO_REQUEST);
-        io_request_pending = false;
+        if (logger_channel_to_worker(MSG_IO_REQUEST)) io_request_pending = false;
     }
     uint64_t now = time_us_64();
     if ((state == LOGGER_RUNNING || (state == LOGGER_STOPPING && !control_sent)) && active_batch < 0 && free_mask) {
@@ -391,25 +456,25 @@ void logger_poll(void)
             ++batch->count;
         }
         if (batch->count && (batch->count == LOG_RECORDS_PER_BATCH || now - batch_started >= UINT64_C(1000000) ||
-                             (state == LOGGER_STOPPING && drained)) &&
-            multicore_fifo_wready()) {
+                             (state == LOGGER_STOPPING && drained))) {
             __dmb();
-            multicore_fifo_push_blocking((uint32_t)active_batch);
-            active_batch = -1;
+            if (logger_channel_to_worker((uint32_t)active_batch)) active_batch = -1;
         }
         if (state == LOGGER_STOPPING && drained && active_batch >= 0 && !batch->count) {
             free_mask |= 1u << active_batch;
             active_batch = -1;
         }
     }
-    if (state == LOGGER_STOPPING && drained && active_batch < 0 && !control_sent && multicore_fifo_wready()) {
-        multicore_fifo_push_blocking(MSG_STOP);
+    if (state == LOGGER_STOPPING && drained && active_batch < 0 && !control_sent && logger_channel_to_worker(MSG_STOP)) {
         control_sent = true;
     }
-    if (state == LOGGER_STARTING && !control_sent && multicore_fifo_wready()) {
-        multicore_fifo_push_blocking(MSG_START | start_rate);
+    if (state == LOGGER_STARTING && !control_sent && logger_channel_to_worker(MSG_START | start_rate)) {
         control_sent = true;
     }
+    if (flash_state == LOGGER_FLASH_REQUESTING && !flash_control_sent &&
+        logger_channel_to_worker(MSG_FLASH | FLASH_PREPARE)) flash_control_sent = true;
+    if (flash_state == LOGGER_FLASH_RELEASING && !flash_control_sent &&
+        logger_channel_to_worker(MSG_FLASH | FLASH_RESUME)) flash_control_sent = true;
     if (now >= next_report) {
         if (stdio_usb_connected()) {
             printf("SD online=%u dropped=%" PRIu64 " uncertain=%" PRIu64 " worst_write_us=%" PRIu64 "%s"

@@ -2,7 +2,8 @@
 
 The default is 50 Hz. Configure an integer rate from 1 through 50 Hz at CMake
 configure time, or use the USB `rate` command after `stop` (see
-`USB_COMMANDS.md`). The runtime value resets at reboot. For example:
+`USB_COMMANDS.md`). The temporary runtime value resets at reboot to the saved
+setting, or the compiled default if no valid setting exists. For example:
 
 ```sh
 cmake --preset firmware -DPICOLOGGER_SAMPLE_RATE_HZ=25

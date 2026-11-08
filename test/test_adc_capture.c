@@ -303,6 +303,31 @@ static void stalled_dma_is_reported(void)
     TEST_ASSERT_FALSE(running);
 }
 
+static void capture_pauses_and_resumes_without_reusing_sequence(void)
+{
+    TEST_ASSERT_TRUE(adc_capture_start());
+    simulate_completion(0, 100);
+    adc_block_t block;
+    TEST_ASSERT_FALSE(adc_capture_pause(NULL));
+    bool was_running = false;
+    TEST_ASSERT_TRUE(adc_capture_pause(&was_running));
+    TEST_ASSERT_TRUE(was_running);
+    TEST_ASSERT_FALSE(running);
+    TEST_ASSERT_EQUAL_UINT(2, aborts);
+    now += 1000000;
+    adc_capture_check();
+    TEST_ASSERT_EQUAL_INT(ADC_CAPTURE_OK, adc_capture_fault());
+    TEST_ASSERT_TRUE(adc_capture_resume());
+    TEST_ASSERT_TRUE(running);
+    simulate_completion(0, 200);
+    TEST_ASSERT_TRUE(adc_capture_take(&block));
+    TEST_ASSERT_EQUAL_UINT32(0, block.sequence);
+    TEST_ASSERT_EQUAL_UINT16(100, block.samples[0]);
+    TEST_ASSERT_TRUE(adc_capture_take(&block));
+    TEST_ASSERT_EQUAL_UINT32(1, block.sequence);
+    TEST_ASSERT_EQUAL_UINT16(200, block.samples[0]);
+}
+
 int main(int argc, char **argv)
 {
     UNITY_BEGIN();
@@ -322,6 +347,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "none")) RUN_TEST(no_dma_channels_is_reported);
     else if (!strcmp(argv[1], "bad_clock")) RUN_TEST(invalid_adc_clock_releases_channels);
     else if (!strcmp(argv[1], "stalled")) RUN_TEST(stalled_dma_is_reported);
+    else if (!strcmp(argv[1], "pause")) RUN_TEST(capture_pauses_and_resumes_without_reusing_sequence);
     else return 1;
     return UNITY_END();
 }

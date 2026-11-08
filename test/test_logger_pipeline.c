@@ -4,6 +4,8 @@
 #include "log_format.h"
 #include "log_writer.h"
 #include "sd_storage.h"
+#include "sensor.h"
+#include "settings_service.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -20,7 +22,7 @@ static pthread_key_t core_key;
 static int worker_marker;
 static void (*test_worker_entry)(void);
 static atomic_bool stop_worker, media, hold_mount, hold_dump_read;
-static atomic_uint returned_batches, opened_files, closed_files, mount_attempts, entered_dump_read;
+static atomic_uint returned_batches, opened_files, closed_files, mount_attempts, entered_dump_read, presence_calls;
 static atomic_uint_fast64_t clock_us;
 static unsigned int pending_samples, next_sequence;
 static uint8_t files[3][8192];
@@ -31,6 +33,9 @@ static unsigned int list_index;
 static int dump_index = -1;
 static size_t dump_offset, dump_text_size;
 static char dump_text[24000];
+static uint8_t flash_sectors[2][4096];
+static bool test_adc_running, test_flash_armed;
+static unsigned int test_adc_pauses, test_adc_resumes, flash_presence_snapshot;
 
 static bool on_worker(void) { return pthread_getspecific(core_key) != NULL; }
 
@@ -91,6 +96,27 @@ void multicore_fifo_push_blocking(uint32_t value)
         wait_briefly();
     }
 }
+bool logger_channel_init(void) { return true; }
+bool logger_channel_to_worker(uint32_t value)
+{
+    if (!multicore_fifo_wready()) return false;
+    multicore_fifo_push_blocking(value);
+    return true;
+}
+bool logger_channel_from_worker(uint32_t *value)
+{
+    if (!multicore_fifo_rvalid()) return false;
+    *value = multicore_fifo_pop_blocking();
+    return true;
+}
+void logger_channel_to_main(uint32_t value) { multicore_fifo_push_blocking(value); }
+bool logger_channel_from_main(uint32_t *value)
+{
+    if (!multicore_fifo_rvalid()) return false;
+    *value = multicore_fifo_pop_blocking();
+    return true;
+}
+bool flash_safe_execute_core_init(void) { return true; }
 static void *run_worker(void *arg)
 {
     (void)arg;
@@ -113,6 +139,48 @@ bool sensor_take_sample(log_record_t *record)
     *record = (log_record_t){.sequence = next_sequence, .timestamp_us = next_sequence * UINT64_C(20000),
         .values = {(int32_t)next_sequence, 100000, 50000, 0}};
     ++next_sequence;
+    return true;
+}
+void sensor_get_status(sensor_status_t *status) { *status = (sensor_status_t){0}; }
+bool adc_app_pause_for_flash(bool *was_running)
+{
+    *was_running = test_adc_running;
+    if (test_adc_running) ++test_adc_pauses;
+    test_adc_running = false;
+    return true;
+}
+bool adc_app_resume_after_flash(bool was_running)
+{
+    if (was_running) { ++test_adc_resumes; test_adc_running = true; }
+    return true;
+}
+void adc_app_poll(void) { if (test_adc_running) abort(); }
+void settings_flash_set_guard(bool armed)
+{
+    if (armed) {
+        if (test_adc_running || logger_flash_state() != LOGGER_FLASH_READY) abort();
+        flash_presence_snapshot = atomic_load(&presence_calls);
+    }
+    test_flash_armed = armed;
+}
+static bool flash_read(void *context, unsigned int slot, uint8_t *data, size_t length)
+{
+    (void)context;
+    memcpy(data, flash_sectors[slot], length);
+    return true;
+}
+static bool flash_erase(void *context, unsigned int slot)
+{
+    (void)context;
+    if (!test_flash_armed || test_adc_running || atomic_load(&presence_calls) != flash_presence_snapshot) abort();
+    memset(flash_sectors[slot], 0xff, sizeof(flash_sectors[slot]));
+    return true;
+}
+static bool flash_program(void *context, unsigned int slot, const uint8_t *data, size_t length)
+{
+    (void)context;
+    if (!test_flash_armed || test_adc_running || atomic_load(&presence_calls) != flash_presence_snapshot) abort();
+    memcpy(flash_sectors[slot], data, length);
     return true;
 }
 
@@ -160,7 +228,7 @@ static bool fs_write(void *ctx, const uint8_t *data, size_t length, size_t *writ
 static bool fs_sync(void *ctx) { (void)ctx; return atomic_load(&media); }
 static bool fs_close(void *ctx) { (void)ctx; (void)atomic_fetch_add(&closed_files, 1); return true; }
 static void fs_unmount(void *ctx) { (void)ctx; }
-static bool fs_present(void *ctx) { (void)ctx; return atomic_load(&media); }
+static bool fs_present(void *ctx) { (void)ctx; (void)atomic_fetch_add(&presence_calls, 1); return atomic_load(&media); }
 static uint64_t fs_now(void *ctx) { (void)ctx; return time_us_64(); }
 log_storage_t sd_storage_interface(void)
 {
@@ -269,6 +337,16 @@ static bool pump_state(logger_state_t desired)
     return false;
 }
 
+static bool pump_flash_state(logger_flash_state_t desired)
+{
+    for (unsigned int i = 0; i < 2000; ++i) {
+        logger_poll();
+        if (logger_flash_state() == desired) return true;
+        wait_briefly();
+    }
+    return false;
+}
+
 static void records_cross_cores_survive_retry_and_rotate(void)
 {
     atomic_store(&hold_mount, true);
@@ -301,6 +379,17 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     TEST_ASSERT_TRUE(collect_io(true));
     TEST_ASSERT_TRUE(logger_request_stop());
     TEST_ASSERT_TRUE(pump_state(LOGGER_STOPPED));
+    for (unsigned int i = 0; i < 10; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_TRUE(logger_flash_prepare());
+    TEST_ASSERT_TRUE(pump_flash_state(LOGGER_FLASH_READY));
+    TEST_ASSERT_FALSE(logger_request_start(25));
+    TEST_ASSERT_FALSE(logger_request_list());
+    unsigned int before = atomic_load(&presence_calls);
+    atomic_fetch_add(&clock_us, UINT64_C(10000000));
+    for (unsigned int i = 0; i < 20; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_EQUAL_UINT(before, atomic_load(&presence_calls));
+    TEST_ASSERT_TRUE(logger_flash_release());
+    TEST_ASSERT_TRUE(pump_flash_state(LOGGER_FLASH_IDLE));
     TEST_ASSERT_TRUE(logger_request_start(25));
     TEST_ASSERT_TRUE(pump_state(LOGGER_RUNNING));
     logger_status_t status;
@@ -360,11 +449,81 @@ static void records_cross_cores_survive_retry_and_rotate(void)
     }
 }
 
+static void boot_stopped_opens_no_file_until_start(void)
+{
+    atomic_store(&media, true);
+    logger_configure_boot(25, 8192, false);
+    logger_start();
+    TEST_ASSERT_TRUE(pump_until(&mount_attempts, 1));
+    for (unsigned int i = 0; i < 20; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_EQUAL_UINT(0, atomic_load(&opened_files));
+    logger_status_t status;
+    logger_get_status(&status);
+    TEST_ASSERT_EQUAL_INT(LOGGER_STOPPED, status.state);
+    TEST_ASSERT_TRUE(logger_request_start(25));
+    TEST_ASSERT_TRUE(pump_state(LOGGER_RUNNING));
+    atomic_store(&stop_worker, true);
+    for (unsigned int i = 0; i < 16; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(worker_thread, NULL));
+    TEST_ASSERT_EQUAL_INT(0, pthread_key_delete(core_key));
+    TEST_ASSERT_EQUAL_UINT(1, atomic_load(&opened_files));
+    log_header_t header;
+    TEST_ASSERT_EQUAL_INT(LOG_OK, log_decode_header(&header, files[0], file_sizes[0]));
+    TEST_ASSERT_EQUAL_UINT32(25, header.sample_rate_hz);
+}
+
+static void config_save_coordinates_real_logger_guard_and_adc(void)
+{
+    memset(flash_sectors, 0xff, sizeof(flash_sectors));
+    test_adc_running = true;
+    atomic_store(&media, true);
+    settings_t defaults = {50, 3, 16777216, true}, changed = {25, 1, 8192, false};
+    settings_service_init((settings_flash_t){NULL, flash_read, flash_erase, flash_program}, defaults);
+    logger_configure_boot(50, 8192, false);
+    logger_start();
+    TEST_ASSERT_TRUE(pump_until(&mount_attempts, 1));
+    settings_request_t result = SETTINGS_REQUEST_BUSY;
+    for (unsigned int i = 0; i < 2000 && result == SETTINGS_REQUEST_BUSY; ++i) {
+        logger_poll();
+        result = settings_service_request(&changed);
+        if (result == SETTINGS_REQUEST_BUSY) wait_briefly();
+    }
+    TEST_ASSERT_EQUAL_INT(SETTINGS_REQUEST_ACCEPTED, result);
+    bool saved = false, resumed = false, completed = false;
+    for (unsigned int i = 0; i < 2000; ++i) {
+        logger_poll();
+        settings_service_poll();
+        if (settings_service_take_result(&saved, &resumed)) { completed = true; break; }
+        wait_briefly();
+    }
+    TEST_ASSERT_TRUE(completed);
+    TEST_ASSERT_TRUE(saved);
+    TEST_ASSERT_TRUE(resumed);
+    TEST_ASSERT_TRUE(test_adc_running);
+    TEST_ASSERT_EQUAL_UINT(1, test_adc_pauses);
+    TEST_ASSERT_EQUAL_UINT(1, test_adc_resumes);
+    settings_snapshot_t snapshot;
+    settings_t active;
+    bool readable;
+    settings_service_get(&snapshot, &active, &readable);
+    TEST_ASSERT_TRUE(readable);
+    TEST_ASSERT_EQUAL_UINT32(25, snapshot.values.rate_hz);
+    TEST_ASSERT_EQUAL_UINT32(50, active.rate_hz);
+    atomic_store(&stop_worker, true);
+    for (unsigned int i = 0; i < 16; ++i) { logger_poll(); wait_briefly(); }
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(worker_thread, NULL));
+    TEST_ASSERT_EQUAL_INT(0, pthread_key_delete(core_key));
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 2) return 1;
-    if (argc == 2) output_file = argv[1];
     UNITY_BEGIN();
-    RUN_TEST(records_cross_cores_survive_retry_and_rotate);
+    if (argc == 2 && !strcmp(argv[1], "boot_stopped")) RUN_TEST(boot_stopped_opens_no_file_until_start);
+    else if (argc == 2 && !strcmp(argv[1], "config_guard")) RUN_TEST(config_save_coordinates_real_logger_guard_and_adc);
+    else {
+        if (argc == 2) output_file = argv[1];
+        RUN_TEST(records_cross_cores_survive_retry_and_rotate);
+    }
     return UNITY_END();
 }

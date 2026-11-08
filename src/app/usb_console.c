@@ -10,6 +10,7 @@
 #include "command_io.h"
 #include "logger.h"
 #include "sensor.h"
+#include "settings_service.h"
 #include "usb_nonblocking.h"
 #include "pico/stdlib.h"
 
@@ -60,6 +61,7 @@ static bool handle_status(void *context, const command_request_t *request)
     (void)emit("STATUS ring_high_water=%" PRIu32, sensor.ring_high_water);
     (void)emit("STATUS adc_samples=%" PRIu64, adc_app_total_samples());
     (void)emit("STATUS adc_fault=%" PRIu32, adc_app_fault());
+    (void)emit("STATUS adc_flash_pauses=%" PRIu32, adc_app_flash_pauses());
     if (storage.current_file)
         (void)emit("STATUS log=%s sd=%u file=LOG_%04" PRIu32 ".BIN",
                    state_name(storage.state), storage.online ? 1u : 0u, storage.current_file);
@@ -76,7 +78,7 @@ static bool begin_stop(void)
 {
     logger_status_t status;
     logger_get_status(&status);
-    if (status.state == LOGGER_STOPPED) return true;
+    if (status.state == LOGGER_STOPPED) return sensor_set_running(false);
     if (status.state != LOGGER_RUNNING || !sensor_set_running(false)) return false;
     if (!logger_request_stop()) {
         if (!sensor_set_running(true)) (void)emit("ERR timer restore failed");
@@ -90,7 +92,10 @@ static bool handle_stop(void *context, const command_request_t *request)
     (void)context; (void)request;
     logger_status_t status;
     logger_get_status(&status);
-    if (status.state == LOGGER_STOPPED) (void)emit("OK stopped");
+    if (status.state == LOGGER_STOPPED) {
+        if (sensor_set_running(false)) (void)emit("OK stopped");
+        else (void)emit("ERR timer stop failed");
+    }
     else if (!begin_stop()) (void)emit("ERR stop busy or timer failure");
     else { stopping = true; (void)emit("PENDING stop"); }
     return true;
@@ -150,7 +155,8 @@ static bool handle_dump(void *context, const command_request_t *request)
 static bool handle_reboot(void *context, const command_request_t *request)
 {
     (void)context; (void)request;
-    if (rebooting) (void)emit("ERR reboot pending");
+    if (settings_service_busy()) (void)emit("ERR config busy");
+    else if (rebooting) (void)emit("ERR reboot pending");
     else {
         rebooting = true;
         reboot_deadline = time_us_64() + UINT64_C(10000000);
@@ -165,7 +171,63 @@ static bool handle_help(void *context, const command_request_t *request)
     (void)emit("HELP status start stop rate <1-50>");
     (void)emit("HELP stream on|off ls dump <filename> reboot");
     (void)emit("HELP stop before rate or dumping the current file");
+    (void)emit("HELP config get | config set <key> <value> | config reset");
     (void)emit("END HELP");
+    return true;
+}
+
+static bool handle_config_get(void *context, const command_request_t *request)
+{
+    (void)context; (void)request;
+    settings_snapshot_t saved;
+    settings_t active;
+    bool readable;
+    settings_service_get(&saved, &active, &readable);
+    (void)emit("CONFIG readable=%u busy=%u slot=%d revision=%" PRIu32,
+               readable ? 1u : 0u, settings_service_busy() ? 1u : 0u, saved.active_slot, saved.revision);
+    (void)emit("CONFIG saved rate=%" PRIu32 " channels=%" PRIu32, saved.values.rate_hz, saved.values.channels);
+    (void)emit("CONFIG saved rotate_bytes=%" PRIu32, saved.values.rotate_bytes);
+    (void)emit("CONFIG saved start_on_boot=%u", saved.values.start_on_boot ? 1u : 0u);
+    (void)emit("CONFIG active rate=%" PRIu32 " channels=%" PRIu32, active.rate_hz, active.channels);
+    (void)emit("CONFIG active rotate_bytes=%" PRIu32, active.rotate_bytes);
+    (void)emit("CONFIG active start_on_boot=%u", active.start_on_boot ? 1u : 0u);
+    (void)emit("END CONFIG");
+    return true;
+}
+
+static void report_config_request(settings_request_t result)
+{
+    switch (result) {
+        case SETTINGS_REQUEST_ACCEPTED: (void)emit("PENDING config; ADC will pause"); break;
+        case SETTINGS_REQUEST_UNCHANGED: (void)emit("OK config unchanged"); break;
+        case SETTINGS_REQUEST_BUSY: (void)emit("ERR stop first or storage/flash busy"); break;
+        case SETTINGS_REQUEST_UNAVAILABLE: (void)emit("ERR settings unavailable"); break;
+        case SETTINGS_REQUEST_INVALID: (void)emit("ERR bad settings"); break;
+    }
+}
+
+static bool handle_config_set(void *context, const command_request_t *request)
+{
+    (void)context;
+    settings_snapshot_t saved;
+    settings_t active;
+    bool readable;
+    settings_service_get(&saved, &active, &readable);
+    (void)active; (void)readable;
+    switch (request->config_key) {
+        case CONFIG_RATE: saved.values.rate_hz = request->config_value; break;
+        case CONFIG_CHANNELS: saved.values.channels = request->config_value; break;
+        case CONFIG_ROTATE_BYTES: saved.values.rotate_bytes = request->config_value; break;
+        case CONFIG_START_ON_BOOT: saved.values.start_on_boot = request->config_value != 0; break;
+    }
+    report_config_request(settings_service_request(&saved.values));
+    return true;
+}
+
+static bool handle_config_reset(void *context, const command_request_t *request)
+{
+    (void)context; (void)request;
+    report_config_request(settings_service_reset());
     return true;
 }
 
@@ -181,6 +243,9 @@ void usb_console_init(void)
     dispatch.handler[COMMAND_DUMP] = handle_dump;
     dispatch.handler[COMMAND_REBOOT] = handle_reboot;
     dispatch.handler[COMMAND_HELP] = handle_help;
+    dispatch.handler[COMMAND_CONFIG_GET] = handle_config_get;
+    dispatch.handler[COMMAND_CONFIG_SET] = handle_config_set;
+    dispatch.handler[COMMAND_CONFIG_RESET] = handle_config_reset;
 }
 
 void usb_console_sample(const log_record_t *record)
@@ -227,6 +292,12 @@ static void progress_controls(void)
 
 void usb_console_poll(void)
 {
+    bool saved, adc_resumed;
+    if (settings_service_take_result(&saved, &adc_resumed)) {
+        if (saved) (void)emit("OK config saved; reboot to apply");
+        else (void)emit("ERR config save uncertain; check config");
+        if (!adc_resumed) (void)emit("ERR ADC resume failed; reboot required");
+    }
     bool is_connected = usb_nb_connected();
     if (!is_connected) {
         if (connected) {

@@ -8,6 +8,8 @@
 #include "pico/stdio_usb.h"
 
 static bool started, have_previous, have_values;
+static bool boot_enabled = true;
+static uint32_t flash_pauses;
 static uint32_t expected_sequence, minimum, maximum, last_value;
 static uint64_t report_at, previous_us, elapsed_us, intervals, blocks, sequence_gaps, sample_errors;
 static uint64_t total_samples;
@@ -15,14 +17,16 @@ static adc_block_t block;
 
 void adc_app_start(void)
 {
-    started = adc_capture_start();
+    started = boot_enabled && adc_capture_start();
     report_at = time_us_64() + UINT64_C(10000000);
 }
+
+void adc_app_configure_boot(bool enabled) { boot_enabled = enabled; }
 
 void adc_app_report_boot(void)
 {
     printf("ADC GP26 requested=10000 Hz block_samples=%u capture=%s fault=%u\n",
-           ADC_BLOCK_SAMPLES, started ? "started" : "unavailable", (unsigned int)adc_capture_fault());
+           ADC_BLOCK_SAMPLES, started ? "started" : boot_enabled ? "unavailable" : "disabled", (unsigned int)adc_capture_fault());
 }
 
 static void process_block(const adc_block_t *record)
@@ -50,6 +54,21 @@ static void process_block(const adc_block_t *record)
 
 uint64_t adc_app_total_samples(void) { return total_samples; }
 uint32_t adc_app_fault(void) { return (uint32_t)adc_capture_fault(); }
+uint32_t adc_app_flash_pauses(void) { return flash_pauses; }
+
+bool adc_app_pause_for_flash(bool *was_running)
+{
+    if (!adc_capture_pause(was_running)) return false;
+    if (*was_running) ++flash_pauses;
+    return true;
+}
+
+bool adc_app_resume_after_flash(bool was_running)
+{
+    if (!was_running) return true;
+    have_previous = false;
+    return adc_capture_resume();
+}
 
 void adc_app_poll(void)
 {

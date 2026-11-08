@@ -2,6 +2,7 @@
 #include "adc_app.h"
 #include "logger.h"
 #include "sensor.h"
+#include "settings_service.h"
 #include "usb_console.h"
 
 #include <stdio.h>
@@ -21,10 +22,33 @@ static const char *replies[4];
 static bool final_reply[4];
 static unsigned int reply_index, reply_count;
 static char dumped_name[33];
+static settings_snapshot_t saved_settings = {{50, 3, 16777216, true}, 0, -1};
+static settings_t active_settings = {50, 3, 16777216, true};
+static bool config_busy, config_done;
 
 uint64_t time_us_64(void) { return now; }
 uint64_t adc_app_total_samples(void) { return 123456; }
 uint32_t adc_app_fault(void) { return 0; }
+uint32_t adc_app_flash_pauses(void) { return 1; }
+void settings_service_get(settings_snapshot_t *saved, settings_t *active, bool *readable)
+{
+    *saved = saved_settings; *active = active_settings; *readable = true;
+}
+bool settings_service_busy(void) { return config_busy; }
+settings_request_t settings_service_request(const settings_t *value)
+{
+    if (sensor.running || config_busy) return SETTINGS_REQUEST_BUSY;
+    saved_settings.values = *value; config_busy = true; return SETTINGS_REQUEST_ACCEPTED;
+}
+settings_request_t settings_service_reset(void)
+{
+    return settings_service_request(&active_settings);
+}
+bool settings_service_take_result(bool *saved, bool *resumed)
+{
+    if (!config_done) return false;
+    config_done = config_busy = false; *saved = *resumed = true; return true;
+}
 bool usb_nb_connected(void) { return attached; }
 size_t usb_nb_read(uint8_t *data, size_t capacity)
 {
@@ -87,7 +111,7 @@ static void commands_are_bounded_and_preserve_sampling_under_backpressure(void)
 {
     usb_console_init();
     pump(2);
-    feed("status\nhelp\nrate 25\nrate 0\nunknown\n");
+    feed("status\nhelp\nrate 25\nrate 0\nunknown\nconfig get\nconfig set rate 25\n");
     pump(100);
     TEST_ASSERT_NOT_NULL(strstr(transmitted, "@STATUS bme_samples=100"));
     TEST_ASSERT_NOT_NULL(strstr(transmitted, "@STATUS ring_high_water=17"));
@@ -96,6 +120,8 @@ static void commands_are_bounded_and_preserve_sampling_under_backpressure(void)
     TEST_ASSERT_NOT_NULL(strstr(transmitted, "@ERR stop first"));
     TEST_ASSERT_NOT_NULL(strstr(transmitted, "@ERR bad arguments"));
     TEST_ASSERT_NOT_NULL(strstr(transmitted, "@ERR unknown command"));
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@CONFIG saved rate=50 channels=3"));
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@ERR stop first or storage/flash busy"));
     char long_line[100];
     memset(long_line, 'x', sizeof(long_line));
     long_line[sizeof(long_line) - 2] = '\n'; long_line[sizeof(long_line) - 1] = 0;
@@ -122,6 +148,18 @@ static void commands_are_bounded_and_preserve_sampling_under_backpressure(void)
     TEST_ASSERT_FALSE(sensor.running);
     storage.state = LOGGER_STOPPED; pump(10);
     TEST_ASSERT_NOT_NULL(strstr(transmitted, "@OK stopped"));
+    feed("config set channels 1\n"); pump(20);
+    TEST_ASSERT_TRUE(config_busy);
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@PENDING config; ADC will pause"));
+    feed("reboot\n"); pump(10);
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@ERR config busy"));
+    TEST_ASSERT_FALSE(rebooted);
+    config_done = true; pump(10);
+    TEST_ASSERT_NOT_NULL(strstr(transmitted, "@OK config saved; reboot to apply"));
+    TEST_ASSERT_EQUAL_UINT32(1, saved_settings.values.channels);
+    feed("config reset\n"); pump(20);
+    TEST_ASSERT_TRUE(config_busy);
+    config_done = true; pump(10);
     feed("rate 25\nstart\n"); pump(20);
     TEST_ASSERT_EQUAL_UINT32(25, sensor.rate_hz);
     TEST_ASSERT_EQUAL_INT(LOGGER_STARTING, storage.state);

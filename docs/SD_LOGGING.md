@@ -22,9 +22,9 @@ card. No card-detect pin is assumed.
 Core 0 drains a 256-record single-context sampling ring into four bounded
 inter-core batches. Core 1 exclusively owns FatFs, mounts, writes and syncs;
 its potentially long SD operations do not directly block the acquisition main
-loop. Batch ownership passes through the RP2040 multicore FIFO with memory
-barriers. This reserves core 1 and the inter-core FIFO; do not use SDK multicore
-lockout or another FIFO consumer concurrently. Interrupts, bus contention,
+loop. Batch ownership passes through bounded SDK multicore queues. The RP2040
+hardware FIFO is reserved for SDK flash lockout; do not use it for application
+messages. Interrupts, bus contention,
 serial printing and finite buffering can still cause sampling or ADC losses;
 no real-time guarantee has been measured.
 
@@ -39,8 +39,8 @@ preserved, not automatically deleted or promoted.
 Records are accumulated in a 512-byte-aligned buffer and normally submitted in
 4096-byte chunks from sector-aligned offsets. The initial 512-byte header write
 and final shorter rotation or USB-stop write are deliberate exceptions. Both v2 header
-and normal chunks end on record boundaries. The default rotation limit is
-16 MiB. To change it:
+and normal chunks end on record boundaries. The compiled default rotation limit
+is 16 MiB; saved settings can override it. To change the build default:
 
 ```sh
 cmake --preset firmware -DPICOLOGGER_LOG_ROTATE_BYTES=8192

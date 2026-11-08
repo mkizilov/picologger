@@ -22,7 +22,7 @@ static adc_blocks_t completed;
 static int dma_channels[2] = {-1, -1};
 static uint32_t dma_mask;
 static volatile uint32_t last_irq_us;
-static bool started;
+static bool started, paused;
 
 static bool dma_is_writing_other_half(unsigned int completed_half)
 {
@@ -32,10 +32,9 @@ static bool dma_is_writing_other_half(unsigned int completed_half)
            (next - base) / sizeof(dma_buffers[0]) == (completed_half ^ 1u);
 }
 
-static void stop_capture(adc_capture_fault_t fault)
+static void disable_capture(void)
 {
     dma_set_irq0_channel_mask_enabled(dma_mask, false);
-    adc_blocks_fail(&completed, fault);
     adc_run(false);
     /* Prevent either chained channel from retriggering the other during abort. */
     for (unsigned int i = 0; i < 2; ++i) {
@@ -48,6 +47,12 @@ static void stop_capture(adc_capture_fault_t fault)
     dma_channel_abort((unsigned int)dma_channels[1]);
     dma_channel_acknowledge_irq0((unsigned int)dma_channels[0]);
     dma_channel_acknowledge_irq0((unsigned int)dma_channels[1]);
+}
+
+static void stop_capture(adc_capture_fault_t fault)
+{
+    adc_blocks_fail(&completed, fault);
+    disable_capture();
 }
 
 static bool dma_has_error(void)
@@ -99,6 +104,39 @@ static void dma_complete_irq(void)
     adc_blocks_commit(&completed);
 }
 
+static void configure_dma(void)
+{
+    unsigned int data_channel = (unsigned int)dma_channels[0];
+    unsigned int control_channel = (unsigned int)dma_channels[1];
+    dma_channel_config data = dma_channel_get_default_config(data_channel);
+    channel_config_set_transfer_data_size(&data, DMA_SIZE_16);
+    channel_config_set_read_increment(&data, false);
+    channel_config_set_write_increment(&data, true);
+    channel_config_set_ring(&data, true, 10);
+    channel_config_set_dreq(&data, DREQ_ADC);
+    channel_config_set_chain_to(&data, control_channel);
+    dma_channel_configure(data_channel, &data, dma_buffers, &adc_hw->fifo, ADC_BLOCK_SAMPLES, false);
+
+    /* Only the data channel consumes DREQ_ADC. */
+    dma_channel_config control = dma_channel_get_default_config(control_channel);
+    channel_config_set_transfer_data_size(&control, DMA_SIZE_32);
+    channel_config_set_read_increment(&control, false);
+    channel_config_set_write_increment(&control, false);
+    channel_config_set_dreq(&control, DREQ_FORCE);
+    channel_config_set_irq_quiet(&control, true);
+    dma_channel_configure(control_channel, &control, &dma_channel_hw_addr(data_channel)->al1_transfer_count_trig,
+                          &dma_reload_count, 1, false);
+    dma_channel_acknowledge_irq0(data_channel);
+    dma_channel_acknowledge_irq0(control_channel);
+}
+
+static void clear_fifo_flags(void)
+{
+    adc_hw->fcs = (adc_hw->fcs & (ADC_FCS_EN_BITS | ADC_FCS_DREQ_EN_BITS |
+                   ADC_FCS_ERR_BITS | ADC_FCS_SHIFT_BITS | ADC_FCS_THRESH_BITS)) |
+                  ADC_FCS_OVER_BITS | ADC_FCS_UNDER_BITS;
+}
+
 bool adc_capture_start(void)
 {
     if (started) return false;
@@ -127,34 +165,9 @@ bool adc_capture_start(void)
     adc_set_round_robin(0);
     adc_fifo_setup(true, true, 1, true, false);
     adc_fifo_drain();
-    /* Preserve FIFO configuration while clearing the write-one-to-clear flags. */
-    adc_hw->fcs = (adc_hw->fcs & (ADC_FCS_EN_BITS | ADC_FCS_DREQ_EN_BITS |
-                   ADC_FCS_ERR_BITS | ADC_FCS_SHIFT_BITS | ADC_FCS_THRESH_BITS)) |
-                  ADC_FCS_OVER_BITS | ADC_FCS_UNDER_BITS;
+    clear_fifo_flags();
     adc_set_clkdiv((float)adc_clock / (float)ADC_RATE_HZ - 1.0f);
-    unsigned int data_channel = (unsigned int)dma_channels[0];
-    unsigned int control_channel = (unsigned int)dma_channels[1];
-    dma_channel_config data = dma_channel_get_default_config(data_channel);
-    channel_config_set_transfer_data_size(&data, DMA_SIZE_16);
-    channel_config_set_read_increment(&data, false);
-    channel_config_set_write_increment(&data, true);
-    channel_config_set_ring(&data, true, 10);
-    channel_config_set_dreq(&data, DREQ_ADC);
-    channel_config_set_chain_to(&data, control_channel);
-    dma_channel_configure(data_channel, &data, dma_buffers, &adc_hw->fifo, ADC_BLOCK_SAMPLES, false);
-
-    /* Only the data channel consumes DREQ_ADC. The unpaced control channel
-     * writes the reload count to the data channel's trigger register. */
-    dma_channel_config control = dma_channel_get_default_config(control_channel);
-    channel_config_set_transfer_data_size(&control, DMA_SIZE_32);
-    channel_config_set_read_increment(&control, false);
-    channel_config_set_write_increment(&control, false);
-    channel_config_set_dreq(&control, DREQ_FORCE);
-    channel_config_set_irq_quiet(&control, true);
-    dma_channel_configure(control_channel, &control, &dma_channel_hw_addr(data_channel)->al1_transfer_count_trig,
-                          &dma_reload_count, 1, false);
-    dma_channel_acknowledge_irq0(data_channel);
-    dma_channel_acknowledge_irq0(control_channel);
+    configure_dma();
     irq_add_shared_handler(DMA_IRQ_0, dma_complete_irq, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
     dma_set_irq0_channel_mask_enabled(dma_mask, true);
     irq_set_enabled(DMA_IRQ_0, true);
@@ -167,7 +180,7 @@ bool adc_capture_start(void)
 
 void adc_capture_check(void)
 {
-    if (!started || completed.fault != ADC_CAPTURE_OK) return;
+    if (!started || paused || completed.fault != ADC_CAPTURE_OK) return;
     bool overrun = (adc_hw->fcs & ADC_FCS_OVER_BITS) != 0;
     bool underrun = (adc_hw->fcs & ADC_FCS_UNDER_BITS) != 0;
     uint32_t last = last_irq_us;
@@ -185,6 +198,40 @@ void adc_capture_check(void)
             else dma_set_irq0_channel_mask_enabled(dma_mask, true);
         }
     }
+}
+
+bool adc_capture_pause(bool *was_running)
+{
+    if (!was_running) return false;
+    *was_running = false;
+    if (!started || paused || completed.fault != ADC_CAPTURE_OK) return true;
+    dma_set_irq0_channel_mask_enabled(dma_mask, false);
+    if (completed.fault != ADC_CAPTURE_OK) return true;
+    if (adc_hw->fcs & (ADC_FCS_OVER_BITS | ADC_FCS_UNDER_BITS)) {
+        stop_capture((adc_hw->fcs & ADC_FCS_OVER_BITS) ? ADC_CAPTURE_FIFO_OVERRUN : ADC_CAPTURE_FIFO_UNDERRUN);
+        return true;
+    }
+    disable_capture();
+    adc_fifo_drain();
+    paused = true;
+    *was_running = true;
+    return true;
+}
+
+bool adc_capture_resume(void)
+{
+    if (!paused) return true;
+    if (completed.fault != ADC_CAPTURE_OK) return false;
+    adc_fifo_drain();
+    clear_fifo_flags();
+    completed.expected_channel = 0;
+    configure_dma();
+    dma_set_irq0_channel_mask_enabled(dma_mask, true);
+    last_irq_us = time_us_32();
+    dma_start_channel_mask(1u << dma_channels[0]);
+    adc_run(true);
+    paused = false;
+    return true;
 }
 
 bool adc_capture_take(adc_block_t *block) { return adc_blocks_take(&completed, block); }
