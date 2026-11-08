@@ -9,6 +9,9 @@ The firmware currently implements a timer-driven LED heartbeat and a USB CDC
 boot banner. See [docs/FLASHING.md](docs/FLASHING.md) for build, flashing, serial
 console and manual verification instructions.
 
+The portable binary log format and the Python CSV decoder are described in
+[docs/LOG_FORMAT.md](docs/LOG_FORMAT.md). The firmware does not yet write logs.
+
 ## Initial environment verification
 
 The initial sandbox could not resolve `github.com`, did not provide CMake on

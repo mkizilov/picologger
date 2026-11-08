@@ -38,6 +38,10 @@ RTOS. `src/core/` contains portable logic, `src/hal/` wraps Pico hardware,
 `src/drivers/` contains device protocols, and `src/app/` assembles the system.
 Host tests compile core code only, independent of the SDK.
 
+The portable binary header and record layout, CRC and streaming CSV decoder are
+specified in [docs/LOG_FORMAT.md](docs/LOG_FORMAT.md). They are not yet wired
+to the firmware's sampling or storage paths.
+
 ## Measurements
 
 Heartbeat timing/jitter, sampling rate, ring-buffer capacity, SD throughput and power
