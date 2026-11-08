@@ -1,0 +1,10 @@
+#ifndef TEST_ADC_REGS_H
+#define TEST_ADC_REGS_H
+#define ADC_FCS_OVER_BITS 0x0800u
+#define ADC_FCS_UNDER_BITS 0x0400u
+#define ADC_FCS_THRESH_BITS 0x0f000000u
+#define ADC_FCS_DREQ_EN_BITS 0x08u
+#define ADC_FCS_ERR_BITS 0x04u
+#define ADC_FCS_SHIFT_BITS 0x02u
+#define ADC_FCS_EN_BITS 0x01u
+#endif

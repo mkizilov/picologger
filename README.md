@@ -12,6 +12,8 @@ prints BME280 readings; see [docs/BME280.md](docs/BME280.md) for wiring and
 sensor-specific checks.
 Timer sampling configuration and GP15 measurements are described in
 [docs/SAMPLING.md](docs/SAMPLING.md).
+The 10 kHz GP26 ADC/DMA path and its integrity checks are described in
+[docs/ADC_DMA.md](docs/ADC_DMA.md).
 
 The portable binary log format and the Python CSV decoder are described in
 [docs/LOG_FORMAT.md](docs/LOG_FORMAT.md). The firmware does not yet write logs.
@@ -40,3 +42,4 @@ sandbox again found GitHub DNS resolution unavailable and CMake absent.
 3. For Pico W, separately build for `pico_w`, flash that UF2 and repeat the LED and serial checks. No physical board has been tested.
 4. Follow [docs/BME280.md](docs/BME280.md) for sensor wiring, scan, readings and chip-ID troubleshooting.
 5. Follow [docs/SAMPLING.md](docs/SAMPLING.md) for the GP15 timing trace and interval-statistics checks.
+6. Follow [docs/ADC_DMA.md](docs/ADC_DMA.md) for safe analog input wiring and ADC/DMA checks.

@@ -1,8 +1,9 @@
 # PicoLogger design
 
 The target is a Raspberry Pi Pico (RP2040), with no RTOS. The current firmware
-blinks its onboard LED, scans I²C, samples the BME280 from timer triggers and prints readings over USB serial; it
-does not yet sample the ADC or write storage. A repeating hardware timer toggles the
+blinks its onboard LED, samples the BME280 from timer triggers, captures GP26
+ADC blocks by DMA and prints diagnostics over USB serial; it does not yet write
+storage. A repeating hardware timer toggles the
 Pico LED every 500 ms. On Pico W the timer changes the desired state and the main
 loop applies it to CYW43, avoiding wireless-driver calls in interrupt context.
 The banner is sent on each USB CDC connection. RP2040 reset information can
@@ -10,8 +11,11 @@ distinguish watchdog-related resets, but not reliably identify all other causes.
 
 ## Planned data path
 
-Timer- and DMA-driven sampling will place ADC samples into a bounded ring
-buffer. The main loop will drain completed data to the microSD card, keeping
+Free-running 10 kHz ADC sampling uses one ADC-paced DMA channel and one chained
+control channel to fill alternating halves; completed blocks enter a bounded
+IRQ-to-main queue. See `docs/ADC_DMA.md` for integrity checks and limitations.
+The main loop currently consumes blocks for diagnostics; later it will drain
+completed data to the microSD card, keeping
 storage latency away from the sampling path. `src/core/ring_buffer` supplies an
 SPSC fixed-record queue with caller-owned storage, power-of-two capacity, and
 release/acquire publication. A full queue rejects each new push and counts it
@@ -23,7 +27,7 @@ In particular, lock-free behavior with the pinned RP2040 toolchain has not yet
 been verified, so do not use it in an ISR until it has been checked. The ring is
 not yet connected to sampling or storage. Buffer sizing and recovery from card
 errors remain design work. The BME280 is an I2C sensor; its current once-per-second
-printing is independent of the planned ADC DMA sampling and log storage.
+printing is independent of ADC DMA sampling and future log storage.
 
 The Pico SDK's RP2040 atomic helpers are not lock-free and can mask interrupts.
 The BME280 sampling path instead keeps completed records in a main-loop-only

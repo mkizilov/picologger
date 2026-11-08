@@ -1,0 +1,68 @@
+#include "adc_app.h"
+
+#include <inttypes.h>
+#include <stdio.h>
+
+#include "adc_capture.h"
+#include "pico/stdlib.h"
+#include "pico/stdio_usb.h"
+
+static bool started, have_previous, have_values;
+static uint32_t expected_sequence, minimum, maximum, last_value;
+static uint64_t report_at, previous_us, elapsed_us, intervals, blocks, sequence_gaps, sample_errors;
+static adc_block_t block;
+
+void adc_app_start(void)
+{
+    started = adc_capture_start();
+    report_at = time_us_64() + UINT64_C(10000000);
+}
+
+void adc_app_report_boot(void)
+{
+    printf("ADC GP26 requested=10000 Hz block_samples=%u capture=%s fault=%u\n",
+           ADC_BLOCK_SAMPLES, started ? "started" : "unavailable", (unsigned int)adc_capture_fault());
+}
+
+static void process_block(const adc_block_t *record)
+{
+    if (record->sequence != expected_sequence) ++sequence_gaps;
+    expected_sequence = record->sequence + 1u;
+    if (have_previous) {
+        elapsed_us += record->completed_us - previous_us;
+        ++intervals;
+    }
+    previous_us = record->completed_us;
+    have_previous = true;
+    ++blocks;
+    for (unsigned int i = 0; i < ADC_BLOCK_SAMPLES; ++i) {
+        uint16_t raw = record->samples[i];
+        if (raw & 0x8000u) { ++sample_errors; continue; }
+        uint32_t value = raw & 0x0fffu;
+        if (!have_values || value < minimum) minimum = value;
+        if (!have_values || value > maximum) maximum = value;
+        last_value = value;
+        have_values = true;
+    }
+}
+
+void adc_app_poll(void)
+{
+    adc_capture_check();
+    while (adc_capture_take(&block)) process_block(&block);
+    uint64_t now = time_us_64();
+    if (now < report_at) return;
+    if (stdio_usb_connected()) {
+        uint64_t rate = elapsed_us ? intervals * ADC_BLOCK_SAMPLES * UINT64_C(1000000) / elapsed_us : 0;
+        printf("ADC blocks=%" PRIu64 " samples=%" PRIu64 " effective_hz=%" PRIu64
+               " seq_gaps=%" PRIu64 " fifo_overrun=%u fifo_underrun=%u sample_errors=%" PRIu64
+               " min=%" PRIu32 " max=%" PRIu32 " last=%" PRIu32 " fault=%u\n",
+               blocks, blocks * ADC_BLOCK_SAMPLES, rate, sequence_gaps,
+               adc_capture_fifo_overrun() ? 1u : 0u, adc_capture_fifo_underrun() ? 1u : 0u, sample_errors,
+               have_values ? minimum : 0, have_values ? maximum : 0,
+               have_values ? last_value : 0, (unsigned int)adc_capture_fault());
+    }
+    report_at = now + UINT64_C(10000000);
+    elapsed_us = intervals = blocks = sequence_gaps = sample_errors = 0;
+    have_values = false;
+}

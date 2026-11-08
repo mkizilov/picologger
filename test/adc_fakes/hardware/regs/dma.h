@@ -1,0 +1,4 @@
+#ifndef TEST_DMA_REGS_H
+#define TEST_DMA_REGS_H
+#define DMA_CH0_CTRL_TRIG_AHB_ERROR_BITS 0x80000000u
+#endif
