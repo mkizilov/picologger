@@ -123,13 +123,10 @@ not physical measurements.
 See [verification evidence and limitations](docs/VERIFICATION.md) and the
 prioritized [roadmap](ROADMAP.md) for the remaining work and estimates.
 
-## License and third-party notices
+## License
 
 Project-owned code is licensed under the [MIT License](LICENSE), copyright
-2026 Mykyta Kizilov. Dependencies retain their own licenses and notices; see
-[third-party notices](THIRD_PARTY_NOTICES.md) and `LICENSES/`. The pinned SD
-dependency's SDIO provenance/terms require review before public publication or
-binary distribution; do not assume the complete dependency bundle is MIT-only.
+2026 Mykyta Kizilov.
 
 ## Performance — unmeasured
 
